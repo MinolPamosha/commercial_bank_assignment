@@ -166,6 +166,23 @@ async def test_ticket_ids_returned_by_a_tool_are_not_flagged_as_unverified():
     assert "INC-2031-0001 (unverified" in answer  # still caught when neither documents nor tools back it
 
 
+async def test_id_echoed_from_the_question_is_not_flagged_but_still_not_citable():
+    """A viewer asks about a confidential incident, retrieval withholds it, and the answer says so.
+    Echoing the id the user typed is not a hallucination; citing it as evidence still is."""
+    out = await validate_node(
+        {
+            "message": "What was the root cause of INC-2025-0033?",
+            "draft_answer": "I have no evidence about INC-2025-0033 in the documents available to you [doc:INC-2025-0033].",
+            "citations": [],
+            "tool_results": [],
+            "intent": "qa",
+        }
+    )
+    answer = out["final_answer"]
+    assert "INC-2025-0033 (unverified" not in answer
+    assert "[doc:INC-2025-0033]" not in answer and "[citation-removed]" in answer
+
+
 async def test_identifier_repair_is_a_no_op_without_tool_data():
     draft = "Mail nimali.perera@apexbank.example about [doc:POL-OPS-04]."
     out = await validate_node({"draft_answer": draft, "citations": [_POLICY], "tool_results": [], "intent": "qa"})

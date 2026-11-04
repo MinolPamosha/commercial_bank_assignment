@@ -127,6 +127,10 @@ async def validate_node(state: AgentState) -> dict:
     tool_ids = {s for s in tool_truth if DOC_ID_PATTERN.fullmatch(s)}
     for s in tool_truth:
         tool_ids.update(DOC_ID_PATTERN.findall(s))
+    # An id the user typed themselves ("what happened in INC-2025-0033?") is being echoed, not
+    # invented: a viewer told "I have nothing on INC-2025-0033" must not see it tagged unverified.
+    # It still cannot be *cited* as [doc:…] unless it was actually retrieved.
+    tool_ids.update(DOC_ID_PATTERN.findall(str(state.get("message") or "")))
 
     cite_check = check_citations(answer, citations + prior, grounded_ids=tool_ids)
     ok = cite_check.ok
