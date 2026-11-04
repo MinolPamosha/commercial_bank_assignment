@@ -98,6 +98,19 @@ class FeedbackRequest(BaseModel):
     comment: str = ""
 
 
+class ConversationSummary(BaseModel):
+    session_id: str
+    title: str
+    updated_at: str
+
+
+class ConversationSaveRequest(BaseModel):
+    """The UI's transcript for one chat (messages, panel events, approval + feedback state)."""
+
+    title: str = Field(min_length=1, max_length=120)
+    state: dict[str, Any]
+
+
 class HealthResponse(BaseModel):
     status: str
     bank: str

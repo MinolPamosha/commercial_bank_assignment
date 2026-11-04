@@ -12,6 +12,11 @@ Evidence continuity: the session also remembers which documents were cited so fa
 answered from memory ("what was the time limit for step 1?") may legitimately reference those
 documents even though no retrieval ran this turn; without this the citation guardrail would
 strip them as hallucinated.
+
+Conversation history (user): the transcript of each chat is saved per user (``conversations.json``,
+newest 20 kept) so the "Recent" list survives sign-out, a new browser and a UI restart. When a
+saved chat is reopened after the API itself restarted, its session memory is re-hydrated from the
+transcript (last turns + cited documents), so a follow-up still has context.
 """
 
 from __future__ import annotations
@@ -46,28 +51,79 @@ class SessionMemory:
 
 
 MAX_CITED_DOCS_PER_SESSION = 40
+MAX_CONVERSATIONS_PER_USER = 20
+REHYDRATE_TURNS = 6  # how much of a saved transcript becomes session memory again
 
 
 class MemoryStore:
     def __init__(self) -> None:
         self.settings = get_settings()
-        self._sessions: dict[str, SessionMemory] = {}
-        self._long_term_path = Path(self.settings.local_index_path) / "long_term_memory.json"
-        self._long_term_path.parent.mkdir(parents=True, exist_ok=True)
-        self._long_term: dict[str, dict[str, Any]] = self._load_long_term()
+        # Keyed per (user, session) so a guessed session id never reaches another user's working memory.
+        self._sessions: dict[tuple[str, str], SessionMemory] = {}
+        root = Path(self.settings.local_index_path)
+        root.mkdir(parents=True, exist_ok=True)
+        self._long_term_path = root / "long_term_memory.json"
+        self._long_term: dict[str, dict[str, Any]] = self._load_json(self._long_term_path)
+        self._conversations_path = root / "conversations.json"
+        # user_id → session_id → {"title", "updated_at", "state"}; "state" is the UI transcript.
+        self._conversations: dict[str, dict[str, dict[str, Any]]] = self._load_json(self._conversations_path)
 
-    def _load_long_term(self) -> dict[str, dict[str, Any]]:
-        if self._long_term_path.exists():
-            return json.loads(self._long_term_path.read_text(encoding="utf-8"))
+    @staticmethod
+    def _load_json(path: Path) -> dict:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
         return {}
 
     def _save_long_term(self) -> None:
         self._long_term_path.write_text(json.dumps(self._long_term, indent=2), encoding="utf-8")
 
+    def _save_conversations(self) -> None:
+        self._conversations_path.write_text(json.dumps(self._conversations), encoding="utf-8")
+
     def get_session(self, session_id: str, user_id: str) -> SessionMemory:
-        if session_id not in self._sessions:
-            self._sessions[session_id] = SessionMemory(session_id=session_id, user_id=user_id)
-        return self._sessions[session_id]
+        key = (user_id, session_id)
+        if key not in self._sessions:
+            mem = SessionMemory(session_id=session_id, user_id=user_id)
+            self._rehydrate(mem)
+            self._sessions[key] = mem
+        return self._sessions[key]
+
+    def _rehydrate(self, mem: SessionMemory) -> None:
+        """Seed a fresh session from its saved transcript (the API restarted, or a chat was
+        reopened on another day). Only the owner's saved chats are consulted."""
+        saved = self._conversations.get(mem.user_id, {}).get(mem.session_id)
+        if not saved:
+            return
+        messages = [m for m in saved.get("state", {}).get("messages", []) if m.get("role") in ("user", "assistant")]
+        for m in messages[-REHYDRATE_TURNS:]:
+            mem.turns.append(Turn(role=m["role"], content=str(m.get("content", ""))[:2000]))
+        for m in messages:
+            for c in m.get("citations") or []:
+                if c.get("doc_id"):
+                    mem.cited_docs[str(c["doc_id"])] = dict(c)
+        logger.info("session_memory_rehydrated", session_id=mem.session_id, turns=len(mem.turns), docs=len(mem.cited_docs))
+
+    # --- Conversation history (per user) ---------------------------------------------------
+    def save_conversation(self, user_id: str, session_id: str, title: str, state: dict[str, Any]) -> None:
+        # Dict order is recency order (oldest first): re-insert on every save. Timestamps alone
+        # tie on coarse clocks, so they are informational rather than the sort key.
+        chats = self._conversations.setdefault(user_id, {})
+        chats.pop(session_id, None)
+        chats[session_id] = {"title": title, "updated_at": datetime.now(timezone.utc).isoformat(), "state": state}
+        for sid in list(chats)[: max(0, len(chats) - MAX_CONVERSATIONS_PER_USER)]:  # drop the oldest
+            chats.pop(sid, None)
+        self._save_conversations()
+
+    def list_conversations(self, user_id: str) -> list[dict[str, Any]]:
+        chats = self._conversations.get(user_id, {})
+        return [
+            {"session_id": sid, "title": c["title"], "updated_at": c["updated_at"]}
+            for sid, c in reversed(list(chats.items()))  # newest first
+        ]
+
+    def get_conversation(self, user_id: str, session_id: str) -> dict[str, Any] | None:
+        saved = self._conversations.get(user_id, {}).get(session_id)
+        return {"session_id": session_id, **saved} if saved else None
 
     def add_turn(self, session_id: str, user_id: str, role: str, content: str) -> SessionMemory:
         mem = self.get_session(session_id, user_id)

@@ -91,6 +91,16 @@ identity, the open chat and the recent list, and the backend memory thread conti
 `session_id` is reused. The JWT itself never goes in the URL; the entry is removed on sign out, when
 the token expires (8 h, the user is told to sign in again), or when the Streamlit process restarts.
 
+**Signing out and back in brings the old chats back, with their memory.** Each chat transcript is
+saved per user on the API (`PUT /api/conversations/{session_id}`, stored in
+`data/index/conversations.json`, newest 20 per user) whenever a turn completes, so the **Recent**
+list is fetched from the server at sign-in rather than living only in the tab. Opening an old chat
+pulls its transcript back and reuses its `session_id`; if the API has restarted since, the memory
+node rehydrates the session from the saved transcript (last six turns plus every document cited), so
+a pronoun follow-up still resolves. Conversations are scoped to the owner: another user asking for the
+same id gets `404`, and in-process session memory is keyed by `(user, session)` so a guessed id never
+reaches someone else's thread.
+
 ## How a turn is decided and executed
 
 - **Supervisor** sees the user message, the conversation memory and the **tool catalog**

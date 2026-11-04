@@ -15,6 +15,8 @@ from backend.app.models.schemas import (
     ChatRequest,
     ChatResponse,
     Citation,
+    ConversationSaveRequest,
+    ConversationSummary,
     FeedbackRequest,
     HealthResponse,
     HitlDecision,
@@ -200,6 +202,33 @@ async def feedback(body: FeedbackRequest, user=Depends(get_current_user)):
             "comment": body.comment,
         },
     )
+    return {"ok": True}
+
+
+# --- Conversation history: a user's chats outlive the browser tab and sign-out ----------------
+MAX_CONVERSATION_BYTES = 2_000_000  # a research turn with full panel events is ~100 KB
+
+
+@router.get("/conversations", response_model=list[ConversationSummary])
+async def list_conversations(user=Depends(get_current_user)):
+    return memory_store.list_conversations(user["username"])
+
+
+@router.get("/conversations/{session_id}")
+async def get_conversation(session_id: str, user=Depends(get_current_user)):
+    saved = memory_store.get_conversation(user["username"], session_id)
+    if not saved:  # also the answer for someone else's session id: nothing leaks across users
+        raise HTTPException(status_code=404, detail="No such conversation for this user")
+    return saved
+
+
+@router.put("/conversations/{session_id}")
+async def save_conversation(session_id: str, body: ConversationSaveRequest, user=Depends(get_current_user)):
+    if len(session_id) > 64 or not session_id.replace("-", "").isalnum():
+        raise HTTPException(status_code=400, detail="Invalid session id")
+    if len(json.dumps(body.state)) > MAX_CONVERSATION_BYTES:
+        raise HTTPException(status_code=413, detail="Conversation too large to save")
+    memory_store.save_conversation(user["username"], session_id, body.title, body.state)
     return {"ok": True}
 
 

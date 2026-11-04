@@ -128,6 +128,48 @@ def test_session_memory_remembers_cited_documents_across_turns():
     assert store.session_citations("other-session", "u1") == []  # scoped per session
 
 
+def _transcript(n_pairs: int, doc_id: str = "POL-OPS-04") -> dict:
+    messages = []
+    for i in range(n_pairs):
+        messages.append({"role": "user", "content": f"question {i}"})
+        messages.append({"role": "assistant", "content": f"answer {i}", "citations": [{"doc_id": doc_id, "title": "Policy"}]})
+    return {"messages": messages, "events": [], "hitl_token": None, "hitl_decision": None, "feedback_given": {}}
+
+
+def test_conversation_history_is_per_user_and_capped(tmp_path, monkeypatch):
+    store = MemoryStore()
+    store._conversations_path = tmp_path / "conversations.json"
+    store._conversations = {}
+    for i in range(25):
+        store.save_conversation("u1", f"s{i}", f"chat {i}", _transcript(1))
+    store.save_conversation("u2", "theirs", "private", _transcript(1))
+
+    listed = store.list_conversations("u1")
+    assert len(listed) == 20 and listed[0]["session_id"] == "s24"  # newest first, oldest 5 dropped
+    assert store.get_conversation("u1", "theirs") is None  # another user's chat is invisible
+    assert store.get_conversation("u2", "theirs")["title"] == "private"
+
+    reloaded = MemoryStore()  # survives a restart: read back from disk
+    reloaded._conversations = reloaded._load_json(store._conversations_path)
+    assert [c["session_id"] for c in reloaded.list_conversations("u1")] == [c["session_id"] for c in listed]
+
+
+def test_reopened_chat_rehydrates_session_memory_after_restart(tmp_path):
+    store = MemoryStore()
+    store._conversations_path = tmp_path / "conversations.json"
+    store._conversations = {}
+    store.save_conversation("u1", "old-chat", "chat", _transcript(5))
+
+    fresh = MemoryStore()  # simulates the API restarting: no in-process sessions
+    fresh._conversations = store._conversations
+    mem = fresh.get_session("old-chat", "u1")
+    # Only the last 6 of the 10 messages become turns, in order.
+    assert [t.content for t in mem.turns] == ["question 2", "answer 2", "question 3", "answer 3", "question 4", "answer 4"]
+    assert "POL-OPS-04" in mem.cited_docs  # evidence continuity carries over too
+    assert "question 4" in fresh.context_block("old-chat", "u1")
+    assert fresh.get_session("old-chat", "intruder").turns == []  # only the owner's transcript is used
+
+
 def test_canned_greeting_only_for_a_real_opener():
     assert _is_greeting("hi", "")
     assert _is_greeting("Thanks!", "")

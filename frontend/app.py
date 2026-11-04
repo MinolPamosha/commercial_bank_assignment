@@ -21,6 +21,7 @@ import json
 import os
 import time
 import uuid
+from datetime import datetime, timezone
 
 import httpx
 import streamlit as st
@@ -93,8 +94,12 @@ def auth_headers() -> dict[str, str]:
 
 
 # --- Conversations (recent chats) ------------------------------------------------------
-# The backend keeps memory per session_id in-process, so switching back to an earlier chat and
-# asking a follow-up continues that thread. The UI keeps the transcript per chat here.
+# A user's chats belong to the user, not to a browser tab: each transcript is saved to the API
+# (`PUT /conversations/{session_id}`, per user, newest 20 kept) after every turn, and the list is
+# loaded again on sign-in, so "Recent" survives sign-out, another browser or a UI restart. Switching
+# back to a chat and asking a follow-up continues that memory thread (the backend re-hydrates
+# session memory from the saved transcript if it has to). The UI keeps the transcript per chat in
+# `chats`: session_id → {"title", "updated_at", "state" (the fields below, fetched lazily)}.
 _CHAT_FIELDS = ("messages", "events", "hitl_token", "hitl_decision", "feedback_given")
 
 
@@ -160,9 +165,49 @@ def chat_title(messages: list[dict]) -> str:
     return first if len(first) <= 44 else first[:43].rstrip() + "…"
 
 
+def _chat_signature() -> tuple:
+    """Cheap change detector so the transcript is only uploaded when something happened."""
+    return (
+        len(st.session_state.messages),
+        st.session_state.hitl_token,
+        st.session_state.hitl_decision,
+        tuple(sorted(st.session_state.feedback_given.items())),
+    )
+
+
 def save_current_chat() -> None:
-    if st.session_state.messages:
-        st.session_state.chats[st.session_state.session_id] = {f: st.session_state[f] for f in _CHAT_FIELDS}
+    if not st.session_state.messages:
+        return
+    sid = st.session_state.session_id
+    state = {f: st.session_state[f] for f in _CHAT_FIELDS}
+    title = chat_title(state["messages"])
+    entry = st.session_state.chats.get(sid) or {}
+    sig = _chat_signature()
+    if entry.get("sig") == sig:
+        return
+    # Newest first, matching the order the API returns the list in.
+    st.session_state.chats = {
+        sid: {"title": title, "updated_at": datetime.now(timezone.utc).isoformat(), "state": state, "sig": sig},
+        **{k: v for k, v in st.session_state.chats.items() if k != sid},
+    }
+    try:
+        httpx.put(f"{API_BASE}/conversations/{sid}", headers=auth_headers(), json={"title": title, "state": state}, timeout=15)
+    except httpx.HTTPError as exc:  # the chat still works from this tab; it just will not be in Recent next time
+        st.toast(f"Could not save this chat to your history: {exc}")
+
+
+def load_chats() -> None:
+    """Recent list for the signed-in user. Full transcripts are fetched when a chat is opened."""
+    try:
+        r = httpx.get(f"{API_BASE}/conversations", headers=auth_headers(), timeout=15)
+        r.raise_for_status()
+        st.session_state.chats = {
+            c["session_id"]: {"title": c["title"], "updated_at": c["updated_at"], "state": None, "sig": None}
+            for c in r.json()
+        }
+    except httpx.HTTPError as exc:
+        st.session_state.chats = {}
+        st.toast(f"Could not load your recent chats: {exc}")
 
 
 def _clear_current() -> None:
@@ -181,14 +226,27 @@ def new_chat() -> None:
     _clear_current()
 
 
-def open_chat(session_id: str) -> None:
+def open_chat(session_id: str) -> bool:
     save_current_chat()
-    saved = st.session_state.chats[session_id]
+    entry = st.session_state.chats[session_id]
+    if entry.get("state") is None:  # first time this tab opens it: fetch the transcript
+        try:
+            r = httpx.get(f"{API_BASE}/conversations/{session_id}", headers=auth_headers(), timeout=15)
+            r.raise_for_status()
+            entry["state"] = r.json()["state"]
+        except httpx.HTTPError as exc:
+            st.error(f"Could not open that chat: {exc}")
+            return False
+    state = entry["state"]
     st.session_state.session_id = session_id
     for f in _CHAT_FIELDS:
-        st.session_state[f] = saved[f]
+        st.session_state[f] = state.get(f, _DEFAULTS[f])
+    # JSON turned the message-index keys into strings on the way through the API.
+    st.session_state.feedback_given = {int(k): v for k, v in (st.session_state.feedback_given or {}).items()}
     st.session_state.feedback_pending = None
     st.session_state.pending_prompt = None
+    entry["sig"] = _chat_signature()
+    return True
 
 
 # --- Auth ----------------------------------------------------------------------------
@@ -200,8 +258,8 @@ def sign_in(username: str, password: str) -> bool:
         st.session_state.token = data["access_token"]
         st.session_state.role = data["role"]
         st.session_state.display_name = data["display_name"]
-        st.session_state.chats = {}  # a new identity starts with its own conversations
         _clear_current()
+        load_chats()  # this person's own history, from the API
         st.session_state.resume_id = uuid.uuid4().hex
         st.query_params["s"] = st.session_state.resume_id
         persist_session()
@@ -242,17 +300,17 @@ with st.sidebar:
         save_current_chat()
         if st.session_state.chats:
             st.caption("Recent")
-            for sid, saved in reversed(list(st.session_state.chats.items())):
+            for sid, entry in list(st.session_state.chats.items()):  # already newest first
                 current = sid == st.session_state.session_id
                 if st.button(
-                    chat_title(saved["messages"]),
+                    entry["title"],
                     key=f"chat-{sid}",
                     type="secondary" if current else "tertiary",
                     use_container_width=True,
                     disabled=current,
                 ):
-                    open_chat(sid)
-                    st.rerun()
+                    if open_chat(sid):
+                        st.rerun()
 
         st.divider()
         # The widget owns its default (on). Seeding the key in session_state before the widget exists
