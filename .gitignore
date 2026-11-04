@@ -47,9 +47,10 @@ logs/
 
 # --- Doc-generation toolchain (not part of the assessed solution) -----------
 # The Word/PNG deliverables in docs/ are committed; the scripts that render
-# them and the personal video-recording script are local-only.
+# them and the presenter-only demo/recording scripts are local-only.
 scripts/docgen/
 scripts/build_docs.py
+docs/word/05_Demo_Script_and_Evaluator_Guide.docx
 docs/word/06_Demo_Video_Recording_Script.docx
 
 # --- Assignment brief (not a deliverable) -----------------------------------
