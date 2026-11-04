@@ -51,6 +51,29 @@ async def test_mcp_outage_degrades_gracefully_for_analyst(ready_retriever):
     assert any(e.message.startswith("Serving degraded") for e in r["events"])
 
 
+async def test_one_failed_rlm_subsearch_does_not_abort_the_turn(ready_retriever, monkeypatch):
+    """Butterfly-effect isolation: a single failed plan step marks degraded but the rest of
+    the research path (other searches → batches → response → HITL) still finishes."""
+    from backend.app.agents import research_agent
+    from backend.app.tools.knowledge_search import knowledge_search as real_search
+
+    calls = {"n": 0}
+
+    async def flaky(query, role, filters=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"ok": False, "error": "Vector/retrieval failure: simulated outage", "results": [], "degraded": True}
+        return await real_search(query, role=role, filters=filters)
+
+    monkeypatch.setattr(research_agent, "knowledge_search", flaky)
+    r = await run_agent(message=RESEARCH_Q, session_id="g-bfly", user_id="analyst1", role=Role.ANALYST)
+    assert "research" in _nodes(r)
+    assert r["degraded"] is True
+    assert any(e.event_type == "error" and "Sub-search failed" in e.message for e in r["events"])
+    assert any(e.event_type == "rlm" and e.message.startswith("Analyzed batch") for e in r["events"])
+    assert r["hitl_required"] is True and r["answer"]  # the turn still produced a draft
+
+
 async def test_research_pauses_at_hitl_and_resumes_without_regenerating(ready_retriever):
     r1 = await run_agent(message=RESEARCH_Q, session_id="g-hitl", user_id="analyst1", role=Role.ANALYST)
     assert r1["hitl_required"] is True and r1["active_node"] == "hitl"
@@ -142,3 +165,14 @@ async def test_api_rate_limit_returns_429_with_retry_after(api_client):
             assert "Retry-After" in r.headers
             break
     assert 429 in statuses and statuses[:3] == [200, 200, 200]
+
+
+async def test_admin_feedback_export_is_role_gated(api_client):
+    from backend.app.memory.store import memory_store
+
+    memory_store.record_feedback("analyst1", {"rating": "down", "comment": "cite the runbook next time"})
+    viewer = await _login(api_client, "viewer1", "viewer123")
+    assert (await api_client.get("/api/admin/feedback", headers=viewer)).status_code == 403
+    admin = await _login(api_client, "admin1", "admin123")
+    body = (await api_client.get("/api/admin/feedback", headers=admin)).json()
+    assert "analyst1" in body and "cite the runbook next time" in body["analyst1"]["preferences"]

@@ -14,7 +14,12 @@ async def retrieval_node(state: AgentState) -> dict:
     role = state["role"] if isinstance(state["role"], Role) else Role(state["role"])
     events = [
         AgentEvent(event_type="node", node="retrieval", message="Retrieval agent starting hybrid search"),
-        AgentEvent(event_type="retrieval", node="retrieval", message="Dense + BM25 sparse search in progress"),
+        AgentEvent(
+            event_type="retrieval",
+            node="retrieval",
+            message="Dense + BM25 sparse search, then lexical rerank",
+            detail={"pipeline": ["dense_search", "bm25_search", "rrf_fuse", "rerank"]},
+        ),
     ]
 
     # Optional metadata hints from natural language
@@ -70,8 +75,11 @@ async def retrieval_node(state: AgentState) -> dict:
         AgentEvent(
             event_type="retrieval",
             node="retrieval",
-            message=f"Retrieved {len(citations)} evidence chunks",
-            detail={"doc_ids": [c["doc_id"] for c in citations]},
+            message=f"Retrieved {len(citations)} evidence chunks (reranked)",
+            detail={
+                "doc_ids": [c["doc_id"] for c in citations],
+                "scores": [{"doc_id": c["doc_id"], "score": round(float(c.get("score") or 0), 4)} for c in citations],
+            },
         )
     )
 

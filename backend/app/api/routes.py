@@ -238,3 +238,12 @@ async def reindex(user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Administrator only")
     await retriever.initialize()
     return {"ok": True, "chunks": len(retriever.chunks), "mode": retriever.mode}
+
+
+@router.get("/admin/feedback")
+async def export_feedback(user=Depends(get_current_user)):
+    """Bonus feedback-loop companion: administrators can inspect every user's ratings,
+    durable preferences derived from thumbs-down comments, and recurring research topics."""
+    if user["role"].value != "administrator":
+        raise HTTPException(status_code=403, detail="Administrator only")
+    return memory_store.export_feedback()

@@ -11,6 +11,17 @@ def test_minmax_normalisation():
     assert _minmax([0.0, 5.0, 10.0]) == [0.0, 0.5, 1.0]
 
 
+def test_rerank_boosts_lexical_overlap_over_hybrid_score_alone(ready_retriever):
+    """Bonus rerank layer: a higher hybrid score without query words loses to a hit that matches them."""
+    hits = [
+        {"chunk_id": "weak_words", "score": 0.80, "text": "unrelated ledger reconciliation notes"},
+        {"chunk_id": "strong_words", "score": 0.45, "text": "payment gateway timeout during UPI settlement lag"},
+    ]
+    ranked = ready_retriever._rerank("payment gateway timeout UPI settlement", hits)
+    assert ranked[0]["chunk_id"] == "strong_words"
+    assert ranked[0]["rerank_score"] > ranked[1]["rerank_score"]
+
+
 def test_rrf_fusion_unions_sources_and_keeps_both_scores(ready_retriever):
     dense = [
         {"chunk_id": "a", "dense_score": 0.9, "source": "local_dense"},

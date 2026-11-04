@@ -59,7 +59,7 @@ NODE_PURPOSE: dict[str, str] = {
     "memory": "recalls earlier turns of this chat and what it already knows about you",
     "input_validation": "checks the request for prompt injection and attempts to pull out secrets",
     "supervisor": "reads the question, works out what kind of task it is and picks the right specialist",
-    "retrieval": "searches the document library using both meaning (embeddings) and keywords (BM25)",
+    "retrieval": "searches the document library with dense embeddings and BM25 keywords, fuses them (RRF) and reranks",
     "research": "breaks a broad question into a search plan, studies documents in batches and pulls the themes together",
     "tools": "calls enterprise tools (the MCP server, Python analysis), but only the ones your role allows",
     "response": "writes the answer from the evidence collected, citing documents as [doc:…]",

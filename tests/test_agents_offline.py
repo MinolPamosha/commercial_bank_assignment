@@ -199,6 +199,21 @@ def test_reopened_chat_rehydrates_session_memory_after_restart(tmp_path):
     assert fresh.get_session("old-chat", "intruder").turns == []  # only the owner's transcript is used
 
 
+def test_feedback_loop_writes_durable_preferences_into_context(tmp_path):
+    store = MemoryStore()
+    store._long_term_path = tmp_path / "long_term_memory.json"
+    store._long_term = {}
+    store.record_feedback("analyst1", {"rating": "up", "comment": ""})  # praise alone is not a preference
+    store.record_feedback("analyst1", {"rating": "down", "comment": "include the backup on-call"})
+    store.remember_topic("analyst1", "payment_outages")
+
+    block = store.context_block("any-session", "analyst1")
+    assert "include the backup on-call" in block
+    assert "User recently rated answers as unhelpful" in block
+    assert "payment_outages" in block
+    assert store.export_feedback()["analyst1"]["preferences"] == "include the backup on-call"
+
+
 def test_canned_greeting_only_for_a_real_opener():
     assert _is_greeting("hi", "")
     assert _is_greeting("Thanks!", "")

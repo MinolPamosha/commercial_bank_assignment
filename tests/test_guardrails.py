@@ -59,8 +59,9 @@ def test_tool_gate_enforces_role_matrix():
     assert validate_tool_params("mcp_service_catalog", {}, Role.ANALYST).ok
     assert validate_tool_params("python_analysis", {"expression": "1+1"}, Role.ANALYST).ok
     assert not validate_tool_params("admin_reindex", {}, Role.ANALYST).ok
-    # Administrator: everything
-    assert validate_tool_params("admin_reindex", {}, Role.ADMINISTRATOR).ok
+    # Administrator: every catalog tool; HTTP-only admin actions are not agent tools
+    assert validate_tool_params("mcp_incident_records", {}, Role.ADMINISTRATOR).ok
+    assert not validate_tool_params("admin_reindex", {}, Role.ADMINISTRATOR).ok
 
 
 def test_tool_gate_rejects_unsafe_arguments_even_for_admin():

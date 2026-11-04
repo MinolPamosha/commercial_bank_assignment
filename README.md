@@ -200,11 +200,14 @@ offers to update them on open).
 
 ### Bonus covered
 
-- Multi-agent state + isolated failure/`degraded` handling
-- Human-in-the-loop node (native LangGraph `interrupt()`) + `/api/chat/hitl` resume
-- Reranking layer in hybrid retriever
-- Long-term memory + feedback loop (thumbs-down comments feed the next turns' context)
-- Docker Compose (`.dockerignore` keeps `.env` and `.venv` out of the image)
+| Bonus | Where it lives | What the evaluator sees |
+| --- | --- | --- |
+| Multi-agent collaboration + butterfly-effect failure handling | `backend/app/agents/graph.py`, `state.py`, specialized nodes | Shared `AgentState`; each node isolates failures into `degraded` / `degradation_reason` instead of crashing the turn. A failed RLM sub-search continues the plan (`tests/test_graph_and_api.py::test_one_failed_rlm_subsearch_does_not_abort_the_turn`); MCP/LLM/vector outages surface in the Activity Panel and still produce a usable answer. |
+| Human-in-the-loop approval | `validation.py` (`interrupt()`), `/api/chat/hitl`, Streamlit Approve/Send back | Research answers pause with a checkpointed draft; resume returns the *same* answer with no re-generation (`test_research_pauses_at_hitl_and_resumes_without_regenerating`). |
+| Reranking layer | `retrieval/hybrid.py::_rerank` (lexical overlap + hybrid score, LangSmith `rerank` span) | Retrieval events say "Dense + BM25 … then lexical rerank"; scores shown in the panel. Unit test: `test_rerank_boosts_lexical_overlap_over_hybrid_score_alone`. |
+| Long-term memory | `memory/store.py` → `data/index/long_term_memory.json` | Per-user preferences, recurring research topics, and feedback survive sessions; loaded into every turn's `memory_context`. |
+| Feedback loop for answer quality | UI thumbs → `POST /api/feedback` → long-term prefs + "recently unhelpful" line in context | 👎 with a comment becomes a durable preference (e.g. "include the backup on-call") that steers later answers; admins can inspect via `GET /api/admin/feedback`. |
+| Containerized deployment | `Dockerfile`, `docker-compose.yml` (api + mcp + ui) | `docker compose up --build` brings up all three services; `.dockerignore` keeps `.env` / `.venv` out of the image. |
 
 ## Evaluator walkthrough
 

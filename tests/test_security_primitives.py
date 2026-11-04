@@ -80,5 +80,7 @@ def test_role_tool_map_matches_assignment_matrix():
     assert role_allows_tool(Role.VIEWER, "knowledge_search")
     assert not role_allows_tool(Role.VIEWER, "mcp_incident_records")
     assert role_allows_tool(Role.ANALYST, "mcp_incident_records")
+    assert role_allows_tool(Role.ADMINISTRATOR, "mcp_incident_records")
+    # Admin HTTP endpoints (/admin/*) are gated on the route, not via phantom agent tools.
     assert not role_allows_tool(Role.ANALYST, "admin_reindex")
-    assert role_allows_tool(Role.ADMINISTRATOR, "admin_reindex")
+    assert not role_allows_tool(Role.ADMINISTRATOR, "admin_reindex")

@@ -95,14 +95,14 @@ class Settings(BaseSettings):
     role_tool_map: dict[str, list[str]] = {
         "viewer": ["knowledge_search"],
         "analyst": ["knowledge_search", "python_analysis", "mcp_employee_directory", "mcp_service_catalog", "mcp_incident_records"],
+        # Admin HTTP endpoints (/admin/reindex, /admin/feedback) are gated by role on the route
+        # itself, not via the agent tool catalog — listing phantom tool names here would lie.
         "administrator": [
             "knowledge_search",
             "python_analysis",
             "mcp_employee_directory",
             "mcp_service_catalog",
             "mcp_incident_records",
-            "admin_reindex",
-            "admin_feedback_export",
         ],
     }
 

@@ -179,7 +179,27 @@ class MemoryStore:
     def record_feedback(self, user_id: str, payload: dict[str, Any]) -> None:
         entry = self._long_term.setdefault(user_id, {"preferences": "", "topics": [], "feedback": []})
         entry.setdefault("feedback", []).append(payload)
+        # Durable preference: a thumbs-down with a real comment becomes a standing instruction
+        # for this user (not only the "last 3 complaints" line), so the feedback loop survives
+        # beyond the recent window.
+        comment = str(payload.get("comment") or "").strip()
+        if payload.get("rating") == "down" and len(comment) >= 8:
+            prefs = [p.strip() for p in str(entry.get("preferences") or "").split(";") if p.strip()]
+            if comment not in prefs:
+                prefs.append(comment)
+                entry["preferences"] = "; ".join(prefs[-8:])  # keep the newest eight
         self._save_long_term()
+
+    def export_feedback(self) -> dict[str, Any]:
+        """Administrator view of every user's long-term memory (feedback + preferences + topics)."""
+        return {
+            user_id: {
+                "preferences": entry.get("preferences") or "",
+                "topics": list(entry.get("topics") or []),
+                "feedback": list(entry.get("feedback") or []),
+            }
+            for user_id, entry in self._long_term.items()
+        }
 
 
 memory_store = MemoryStore()

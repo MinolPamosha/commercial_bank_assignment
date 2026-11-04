@@ -302,7 +302,9 @@ class HybridRetriever:
         for h in hits:
             t_tokens = set(_tokenize(h.get("text", "")))
             overlap = len(q_tokens & t_tokens) / (len(q_tokens) + 1e-9)
-            h["rerank_score"] = 0.7 * h.get("score", 0.0) + 0.3 * overlap
+            # Lexical overlap is weighted high enough to flip a near-miss hybrid ranking
+            # when the query words actually appear in the chunk (the point of a second stage).
+            h["rerank_score"] = 0.55 * h.get("score", 0.0) + 0.45 * overlap
         return sorted(hits, key=lambda x: x["rerank_score"], reverse=True)
 
 
