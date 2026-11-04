@@ -17,7 +17,7 @@ class AgentState(TypedDict, total=False):
 
     # Routing
     intent: Literal["qa", "research", "tool", "admin", "chitchat"]
-    route: Literal["retrieve", "research", "tools", "respond", "hitl", "end"]
+    route: Literal["retrieve", "research", "tools", "respond", "hitl", "revise", "end"]
     plan: list[str]
     selected_tool: Optional[str]  # supervisor's tool choice (validated against the catalog)
     tool_params: dict[str, Any]  # LLM-proposed params; re-validated by the tool gate
@@ -51,4 +51,7 @@ class AgentState(TypedDict, total=False):
     degraded: bool
     degradation_reason: Optional[str]
     hitl_required: bool  # True while the graph is paused at the `hitl` interrupt
+    # Send-back revision: the reviewer's note steers the Response agent, then HITL pauses again.
+    revision_feedback: Optional[str]
+    revision_count: int
     recursion_depth: int

@@ -65,6 +65,11 @@ def _route_after_validate(state: AgentState) -> str:
     return "hitl" if state.get("route") == "hitl" else "end"
 
 
+def _route_after_hitl(state: AgentState) -> str:
+    # Send-back → Response revises from the reviewer's note; Approve / stop → END.
+    return "response" if state.get("route") == "revise" else "end"
+
+
 def build_graph():
     g = StateGraph(AgentState)
     g.add_node("supervisor", supervisor_node)
@@ -91,7 +96,7 @@ def build_graph():
     g.add_edge("tools", "response")
     g.add_edge("response", "validate")
     g.add_conditional_edges("validate", _route_after_validate, {"hitl": "hitl", "end": END})
-    g.add_edge("hitl", END)
+    g.add_conditional_edges("hitl", _route_after_hitl, {"response": "response", "end": END})
 
     checkpointer = MemorySaver()
     return g.compile(checkpointer=checkpointer)
@@ -309,6 +314,8 @@ async def _stream_turn(
         "degraded": False,
         "degradation_reason": None,
         "hitl_required": require_hitl,
+        "revision_feedback": None,
+        "revision_count": 0,
         "recursion_depth": 0,
         "retrieval_results": [],
         "research_batches": [],
@@ -358,10 +365,23 @@ async def _resume_turn(
         yield chunk
 
     result = _build_result(final, events, session_id)
-    if not decision.get("approved"):
-        # The draft was already written to memory when it was produced; record the outcome.
+    if decision.get("approved"):
+        # The draft (original or last revision) was already written when it was produced.
+        pass
+    elif result.get("hitl_required"):
+        # Send-back produced a revised draft that is waiting for approval again.
         _traced_memory_update(session_id, user_id, "assistant", result["answer"])
-    logger.info("hitl_resumed", session_id=session_id, approved=bool(decision.get("approved")))
+        memory_store.remember_citations(session_id, user_id, result["citations"])
+    else:
+        # Revision limit reached — record the stop message.
+        _traced_memory_update(session_id, user_id, "assistant", result["answer"])
+    logger.info(
+        "hitl_resumed",
+        session_id=session_id,
+        approved=bool(decision.get("approved")),
+        hitl_required=bool(result.get("hitl_required")),
+        revision=int(final.get("revision_count") or 0),
+    )
     yield {"type": "result", "result": result}
 
 

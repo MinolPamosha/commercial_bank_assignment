@@ -10,9 +10,11 @@ import json
 import httpx
 import pytest
 
-from backend.app.agents.graph import NoPendingApproval, run_agent, stream_agent
+from backend.app.agents.graph import NoPendingApproval, get_compiled_graph, run_agent, stream_agent
 from backend.app.main import app
 from backend.app.models.schemas import Role
+
+get_compiled_graph.cache_clear()  # pick up graph edge changes (HITL → revise → response)
 
 RESEARCH_Q = "Summarize all outage reports related to payment failures during the last year and identify recurring root causes."
 
@@ -91,10 +93,55 @@ async def test_research_pauses_at_hitl_and_resumes_without_regenerating(ready_re
         await run_agent(message=RESEARCH_Q, session_id="g-hitl", user_id="analyst1", role=Role.ANALYST, resume={"approved": True})
 
 
-async def test_hitl_rejection_withholds_the_answer(ready_retriever):
-    await run_agent(message=RESEARCH_Q, session_id="g-rej", user_id="analyst1", role=Role.ANALYST)
-    r = await run_agent(message=RESEARCH_Q, session_id="g-rej", user_id="analyst1", role=Role.ANALYST, resume={"approved": False, "note": "incomplete"})
-    assert "rejected" in r["answer"].lower()
+async def test_hitl_send_back_revises_from_the_note_and_pauses_again(ready_retriever):
+    await run_agent(message=RESEARCH_Q, session_id="g-rev", user_id="analyst1", role=Role.ANALYST)
+    note = "Lead with the recurring root causes and drop the policy digression"
+    r = await run_agent(
+        message=RESEARCH_Q,
+        session_id="g-rev",
+        user_id="analyst1",
+        role=Role.ANALYST,
+        resume={"approved": False, "note": note},
+    )
+    # Meaningful next draft: response ran again with the note, then HITL paused for re-approval.
+    assert r["hitl_required"] is True and r["active_node"] == "hitl"
+    assert "response" in _nodes(r) and "validate" in _nodes(r)
+    assert any("Revising" in e.message or "sent back" in e.message.lower() for e in r["events"])
+    assert note.lower() in r["answer"].lower()  # offline stub echoes the revision prompt
+
+    # Approving the revision releases *that* draft, not the original.
+    r2 = await run_agent(
+        message=RESEARCH_Q,
+        session_id="g-rev",
+        user_id="analyst1",
+        role=Role.ANALYST,
+        resume={"approved": True, "note": "looks good"},
+    )
+    assert r2["hitl_required"] is False and r2["answer"] == r["answer"]
+
+
+async def test_hitl_send_back_stops_after_revision_limit(ready_retriever):
+    from backend.app.agents.validation import MAX_HITL_REVISIONS
+
+    await run_agent(message=RESEARCH_Q, session_id="g-lim", user_id="analyst1", role=Role.ANALYST)
+    for i in range(MAX_HITL_REVISIONS):
+        r = await run_agent(
+            message=RESEARCH_Q,
+            session_id="g-lim",
+            user_id="analyst1",
+            role=Role.ANALYST,
+            resume={"approved": False, "note": f"still too vague pass {i+1}"},
+        )
+        assert r["hitl_required"] is True
+    stop = await run_agent(
+        message=RESEARCH_Q,
+        session_id="g-lim",
+        user_id="analyst1",
+        role=Role.ANALYST,
+        resume={"approved": False, "note": "still not right"},
+    )
+    assert stop["hitl_required"] is False
+    assert "revision" in stop["answer"].lower() and "still not right" in stop["answer"].lower()
 
 
 async def test_stream_contract_events_then_result(ready_retriever):

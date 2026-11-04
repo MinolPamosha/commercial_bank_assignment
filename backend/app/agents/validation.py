@@ -23,7 +23,12 @@ from backend.app.config import get_settings
 from backend.app.models.schemas import AgentEvent
 from backend.app.security.guardrails import check_citations
 
-REJECTED_ANSWER = "A human reviewer rejected this answer. Please rephrase your question or contact your team lead."
+# After this many send-backs the loop stops — the reviewer must rephrase rather than thrash.
+MAX_HITL_REVISIONS = 2
+DEFAULT_REVISION_NOTE = (
+    "Make the answer clearer, more specific and more actionable for a bank employee. "
+    "Keep every citation grounded in the evidence."
+)
 
 
 def _referenced(answer: str, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -189,6 +194,10 @@ async def hitl_node(state: AgentState) -> dict:
     First execution: `interrupt()` raises internally, the graph checkpoints and stops.
     Resumed execution: the node re-runs from the top and `interrupt()` returns the
     reviewer's decision.
+
+    Approve → release the draft as-is.
+    Send back → route to the Response agent with the reviewer's note so the next draft is a
+    meaningful revision (evidence is reused; research is not re-run), then pause at HITL again.
     """
     draft = state.get("final_answer") or ""
     decision: dict[str, Any] = interrupt(
@@ -196,10 +205,11 @@ async def hitl_node(state: AgentState) -> dict:
             "reason": "Research answers are released only after a human review.",
             "draft_preview": draft[:280],
             "citations": [c.get("doc_id") for c in state.get("citations") or []],
+            "revision": int(state.get("revision_count") or 0),
         }
     )
     approved = bool((decision or {}).get("approved"))
-    note = str((decision or {}).get("note") or "")
+    note = str((decision or {}).get("note") or "").strip()
 
     if approved:
         events = [
@@ -207,17 +217,56 @@ async def hitl_node(state: AgentState) -> dict:
                 event_type="final",
                 node="hitl",
                 message="Human reviewer approved the draft — answer released",
-                detail={"note": note},
+                detail={"note": note, "revision": int(state.get("revision_count") or 0)},
             )
         ]
-        return {"active_node": "hitl", "hitl_required": False, "final_answer": draft, "events": events, "route": "end"}
+        return {
+            "active_node": "hitl",
+            "hitl_required": False,
+            "final_answer": draft,
+            "revision_feedback": None,
+            "events": events,
+            "route": "end",
+        }
+
+    feedback = note or DEFAULT_REVISION_NOTE
+    count = int(state.get("revision_count") or 0)
+    if count >= MAX_HITL_REVISIONS:
+        stop = (
+            f"After {count} revision(s) this draft was still not approved. "
+            f"Last reviewer note: {feedback}\n\n"
+            "Please rephrase the question or ask a narrower follow-up — the evidence from this turn stays in memory."
+        )
+        events = [
+            AgentEvent(
+                event_type="validation",
+                node="hitl",
+                message=f"Send-back limit reached ({MAX_HITL_REVISIONS}) — stopping the revision loop",
+                detail={"note": feedback, "revision": count},
+            )
+        ]
+        return {
+            "active_node": "hitl",
+            "hitl_required": False,
+            "final_answer": stop,
+            "revision_feedback": None,
+            "events": events,
+            "route": "end",
+        }
 
     events = [
         AgentEvent(
-            event_type="validation",
+            event_type="hitl",
             node="hitl",
-            message="Human reviewer rejected the draft — answer withheld",
-            detail={"note": note},
+            message="Draft sent back — revising with the reviewer's note",
+            detail={"note": feedback, "revision": count + 1},
         )
     ]
-    return {"active_node": "hitl", "hitl_required": False, "final_answer": REJECTED_ANSWER, "events": events, "route": "end"}
+    return {
+        "active_node": "hitl",
+        "hitl_required": True,  # validate will pause again after the revision
+        "revision_feedback": feedback,
+        "revision_count": count + 1,
+        "events": events,
+        "route": "revise",
+    }

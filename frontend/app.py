@@ -611,23 +611,54 @@ def decide_hitl(approved: bool, note: str) -> None:
         )
         return
     data = r.json()
-    st.session_state.hitl_token = None
-    st.session_state.hitl_decision = "approved" if approved else "sent back"
-    # The graph resumed from its checkpoint, so only the `hitl` node ran: append its events
-    # to this turn's panel rather than replacing the supervisor/research/response steps.
+    # Append resume events (hitl → maybe response → validate → hitl) onto this turn's panel.
     st.session_state.events = (st.session_state.events or []) + (data.get("events") or [])
-    verdict = "✅ **You approved this answer.**" if approved else "⛔ **You sent this draft back.**"
-    if note:
-        verdict += f" Note: _{note}_"
+
+    if approved:
+        st.session_state.hitl_token = None
+        st.session_state.hitl_decision = "approved"
+        verdict = "✅ **You approved this answer.**"
+        if note:
+            verdict += f" Note: _{note}_"
+        st.session_state.messages.append({"role": "assistant", "content": verdict, "citations": None})
+        return
+
+    # Send back: the backend revises from the note and (usually) pauses again for approval.
+    feedback = (note or "").strip() or "make it clearer and more actionable"
     st.session_state.messages.append(
         {
             "role": "assistant",
-            "content": verdict if approved else f"{verdict}\n\n{data.get('answer', '')}",
+            "content": f"↩️ **Sent back for revision.** Note: _{feedback}_",
             "citations": None,
-            "degraded": data.get("degraded"),
-            "degradation_reason": data.get("degradation_reason"),
         }
     )
+    if data.get("hitl_required") and data.get("hitl_token"):
+        st.session_state.hitl_token = data["hitl_token"]
+        st.session_state.hitl_decision = None  # still waiting — the revised draft is below
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": data.get("answer", ""),
+                "meta": "Revised draft · waiting for approval",
+                "citations": data.get("citations"),
+                "degraded": data.get("degraded"),
+                "degradation_reason": data.get("degradation_reason"),
+                "hitl_required": True,
+            }
+        )
+    else:
+        # Revision limit reached — no further approval loop.
+        st.session_state.hitl_token = None
+        st.session_state.hitl_decision = "sent back"
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": data.get("answer", ""),
+                "citations": data.get("citations"),
+                "degraded": data.get("degraded"),
+                "degradation_reason": data.get("degradation_reason"),
+            }
+        )
 
 
 # --- Screen 2/3: conversation ---------------------------------------------------------
@@ -681,8 +712,16 @@ with col_chat:
     if st.session_state.hitl_token and not prompt:
         with st.container(border=True):
             ui.kicker("Human in the loop")
-            st.markdown("**This answer is waiting for your approval.** Happy with it? Approve it. If not, send it back.")
-            st.text_input("Note (optional)", key="hitl_note", label_visibility="collapsed", placeholder="Add a note if you like")
+            st.markdown(
+                "**This answer is waiting for your approval.** Happy with it? Approve it. "
+                "If not, send it back with a note — the assistant revises from that note and shows you the new draft."
+            )
+            st.text_input(
+                "Note (optional)",
+                key="hitl_note",
+                label_visibility="collapsed",
+                placeholder="What should change? e.g. lead with the recurring root causes, drop the policy digression",
+            )
             a1, a2 = st.columns(2)
             if a1.button("Approve", type="primary", use_container_width=True, icon=":material/check:"):
                 decide_hitl(True, st.session_state.get("hitl_note", ""))

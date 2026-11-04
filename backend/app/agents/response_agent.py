@@ -45,17 +45,39 @@ async def response_node(state: AgentState) -> dict:
             "Ask me about policies, incidents, runbooks, or architecture."
         )
     else:
-        user_prompt = (
-            f"User question:\n{state['message']}\n\n"
-            f"Evidence JSON:\n{json.dumps(evidence, default=str)[:12000]}\n\n"
-            "Write a clear answer for a bank employee. Cite sources as [doc:<doc_id>] only when the id appears "
-            "in citations or earlier_sources. Call out recurring root causes when research batches exist. "
-            "If a tool_results entry has ok=false because the role is 'not permitted', say plainly that the "
-            "user's role is not authorized for that data and suggest contacting an analyst/administrator — "
-            "do not guess the data. When answering from tool_results, copy names, ids and e-mail addresses "
-            "exactly as they appear in the data. If a tool failed or timed out, say live data is unavailable right now. "
-            "If the question is a follow-up, answer from the memory block. If evidence is weak, say what is missing."
-        )
+        revision = (state.get("revision_feedback") or "").strip()
+        if revision:
+            events.append(
+                AgentEvent(
+                    event_type="hitl",
+                    node="response",
+                    message="Revising the draft from the reviewer's send-back note",
+                    detail={"note": revision, "revision": int(state.get("revision_count") or 0)},
+                )
+            )
+            previous = state.get("draft_answer") or state.get("final_answer") or ""
+            # Feedback first so it survives truncated offline stubs and leads the LLM's attention.
+            user_prompt = (
+                f"Reviewer feedback — address this in the revision:\n{revision}\n\n"
+                f"User question:\n{state['message']}\n\n"
+                f"Previous draft (a human reviewer sent this back):\n{previous[:3000]}\n\n"
+                f"Evidence JSON:\n{json.dumps(evidence, default=str)[:10000]}\n\n"
+                "Rewrite the answer so it satisfies the reviewer's feedback while staying grounded in the evidence. "
+                "Cite sources as [doc:<doc_id>] only when the id appears in citations or earlier_sources. "
+                "Do not mention the review process, HITL, or that this is a revision — write the improved answer directly."
+            )
+        else:
+            user_prompt = (
+                f"User question:\n{state['message']}\n\n"
+                f"Evidence JSON:\n{json.dumps(evidence, default=str)[:12000]}\n\n"
+                "Write a clear answer for a bank employee. Cite sources as [doc:<doc_id>] only when the id appears "
+                "in citations or earlier_sources. Call out recurring root causes when research batches exist. "
+                "If a tool_results entry has ok=false because the role is 'not permitted', say plainly that the "
+                "user's role is not authorized for that data and suggest contacting an analyst/administrator — "
+                "do not guess the data. When answering from tool_results, copy names, ids and e-mail addresses "
+                "exactly as they appear in the data. If a tool failed or timed out, say live data is unavailable right now. "
+                "If the question is a follow-up, answer from the memory block. If evidence is weak, say what is missing."
+            )
         try:
             answer = await acomplete(
                 system="Produce accurate, citation-grounded answers. Never invent document ids.",
@@ -80,11 +102,18 @@ async def response_node(state: AgentState) -> dict:
                 "route": "validate",
             }
 
-    events.append(AgentEvent(event_type="final", node="response", message="Draft answer ready"))
+    events.append(
+        AgentEvent(
+            event_type="final",
+            node="response",
+            message="Revised draft ready" if state.get("revision_feedback") else "Draft answer ready",
+        )
+    )
     return {
         "active_node": "response",
         "draft_answer": answer,
         "final_answer": answer,
+        "revision_feedback": None,  # consumed for this pass
         "events": events,
         "route": "validate",
     }

@@ -121,8 +121,10 @@ reaches someone else's thread.
   the steps through hybrid search, batches hits per document, counts facets with the Python Analysis tool,
   recurses once on the dominant themes and hands compact findings to the Response agent.
 - **HITL** is a native LangGraph `interrupt()`. The thread (`thread_id = session_id`) is checkpointed;
-  `/api/chat/hitl` resumes it with `Command(resume=…)` in ~20 ms with no LLM calls, so the reviewer
-  releases exactly the draft they saw. Resuming a thread with nothing pending returns `410`.
+  Approve resumes with `Command(resume=…)` and releases exactly the draft the reviewer saw (no re-generation).
+  **Send back** routes to the Response agent with the reviewer's note so the next draft is a meaningful
+  revision over the same evidence, then pauses at HITL again (capped at 2 revisions). Resuming a thread
+  with nothing pending returns `410`.
 - **Validation** removes invented `[doc:…]` citations and marks bare document ids the evidence cannot back
   as "(unverified reference)".
 - **MCP** is a real Model Context Protocol server (`mcp_server/main.py`, official `mcp` SDK / FastMCP, Streamable
@@ -203,7 +205,7 @@ offers to update them on open).
 | Bonus | Where it lives | What the evaluator sees |
 | --- | --- | --- |
 | Multi-agent collaboration + butterfly-effect failure handling | `backend/app/agents/graph.py`, `state.py`, specialized nodes | Shared `AgentState`; each node isolates failures into `degraded` / `degradation_reason` instead of crashing the turn. A failed RLM sub-search continues the plan (`tests/test_graph_and_api.py::test_one_failed_rlm_subsearch_does_not_abort_the_turn`); MCP/LLM/vector outages surface in the Activity Panel and still produce a usable answer. |
-| Human-in-the-loop approval | `validation.py` (`interrupt()`), `/api/chat/hitl`, Streamlit Approve/Send back | Research answers pause with a checkpointed draft; resume returns the *same* answer with no re-generation (`test_research_pauses_at_hitl_and_resumes_without_regenerating`). |
+| Human-in-the-loop approval | `validation.py` (`interrupt()`), `/api/chat/hitl`, Streamlit Approve/Send back | Research answers pause with a checkpointed draft; Approve releases that draft unchanged. Send back revises from the reviewer's note and pauses again (`test_hitl_send_back_revises_from_the_note_and_pauses_again`). |
 | Reranking layer | `retrieval/hybrid.py::_rerank` (lexical overlap + hybrid score, LangSmith `rerank` span) | Retrieval events say "Dense + BM25 … then lexical rerank"; scores shown in the panel. Unit test: `test_rerank_boosts_lexical_overlap_over_hybrid_score_alone`. |
 | Long-term memory | `memory/store.py` → `data/index/long_term_memory.json` | Per-user preferences, recurring research topics, and feedback survive sessions; loaded into every turn's `memory_context`. |
 | Feedback loop for answer quality | UI thumbs → `POST /api/feedback` → long-term prefs + "recently unhelpful" line in context | 👎 with a comment becomes a durable preference (e.g. "include the backup on-call") that steers later answers; admins can inspect via `GET /api/admin/feedback`. |

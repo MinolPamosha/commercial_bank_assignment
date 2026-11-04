@@ -153,9 +153,10 @@ async def chat_stream(body: ChatRequest, user=Depends(get_current_user)):
 async def hitl_decide(body: HitlDecision, user=Depends(get_current_user)):
     """Resolve a paused research answer by resuming the LangGraph thread at its `hitl` interrupt.
 
-    Only the requester (or an administrator) may decide. Nothing is re-generated: the
-    reviewer receives exactly the draft they saw. If the API restarted since the pause
-    (in-memory checkpointer) the thread has no pending interrupt → 410, ask again.
+    Approve → the checkpointed draft is released as-is (no re-generation).
+    Send back → the Response agent revises using the reviewer's note and the same evidence;
+    the revised draft pauses at HITL again (`hitl_required=True` + a fresh token).
+    If the API restarted since the pause (in-memory checkpointer) → 410, ask again.
     """
     pending = decode_hitl_token(body.hitl_token)
     if pending["sub"] != user["username"] and user["role"].value != "administrator":
@@ -178,14 +179,25 @@ async def hitl_decide(body: HitlDecision, user=Depends(get_current_user)):
         logger.error("hitl_unhandled", error=str(exc))
         raise HTTPException(status_code=500, detail=f"Agent failure: {exc}") from exc
 
-    logger.info("hitl_decided", user=user["username"], approved=body.approved, session_id=pending["sid"])
+    hitl_token = None
+    if result.get("hitl_required"):  # send-back produced a revised draft waiting again
+        hitl_token = create_hitl_token(username=user["username"], session_id=pending["sid"], message=pending["msg"])
+
+    logger.info(
+        "hitl_decided",
+        user=user["username"],
+        approved=body.approved,
+        session_id=pending["sid"],
+        revised=bool(hitl_token),
+    )
     citations = [Citation(**c) if not isinstance(c, Citation) else c for c in result.get("citations") or []]
     return ChatResponse(
         answer=result["answer"],
         citations=citations,
         session_id=pending["sid"],
         events=result.get("events") or [],
-        hitl_required=False,
+        hitl_required=bool(result.get("hitl_required")),
+        hitl_token=hitl_token,
         degraded=bool(result.get("degraded")),
         degradation_reason=result.get("degradation_reason"),
     )
