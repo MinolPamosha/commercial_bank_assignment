@@ -163,13 +163,21 @@ async def hitl_decide(body: HitlDecision, user=Depends(get_current_user)):
     if pending["sub"] != user["username"] and user["role"].value != "administrator":
         raise HTTPException(status_code=403, detail="Not allowed to resolve this approval request")
 
+    note = (body.note or "").strip()
+    if not body.approved and not note:
+        # A send back without a reason gives the Response agent nothing to revise against.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Add a short note saying what should change before sending the draft back.",
+        )
+
     try:
         result = await run_agent(
             message=pending["msg"],
             session_id=pending["sid"],
             user_id=user["username"],
             role=user["role"],
-            resume={"approved": body.approved, "note": body.note, "decided_by": user["username"]},
+            resume={"approved": body.approved, "note": note, "decided_by": user["username"]},
         )
     except NoPendingApproval as exc:
         raise HTTPException(

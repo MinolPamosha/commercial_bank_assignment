@@ -195,6 +195,10 @@ async def test_api_stream_hitl_token_and_resume(api_client):
     viewer = await _login(api_client, "viewer1", "viewer123")
     assert (await api_client.post("/api/chat/hitl", headers=viewer, json={"hitl_token": result["hitl_token"], "approved": True})).status_code == 403
 
+    # Send back needs a note: the rewrite is based on it. The draft stays pending after a refusal.
+    empty = await api_client.post("/api/chat/hitl", headers=headers, json={"hitl_token": result["hitl_token"], "approved": False, "note": "   "})
+    assert empty.status_code == 422 and "note" in empty.json()["detail"].lower()
+
     ok = await api_client.post("/api/chat/hitl", headers=headers, json={"hitl_token": result["hitl_token"], "approved": True, "note": "ok"})
     assert ok.status_code == 200 and ok.json()["answer"] == result["answer"]
 

@@ -127,8 +127,10 @@ also forgets preferences and feedback).
 - **HITL** is a native LangGraph `interrupt()`. The thread (`thread_id = session_id`) is checkpointed;
   Approve resumes with `Command(resume=…)` and releases exactly the draft the reviewer saw (no re-generation).
   **Send back** routes to the Response agent with the reviewer's note so the next draft is a meaningful
-  revision over the same evidence, then pauses at HITL again (capped at 2 revisions). Resuming a thread
-  with nothing pending returns `410`.
+  revision over the same evidence, then pauses at HITL again (capped at 2 revisions). A send back without
+  a note is refused (`422`) in the API and blocked in the UI, since the note is what the rewrite is based on.
+  Each revised draft appears as a new message under the one it replaces, which collapses into
+  "Earlier draft (sent back)". Resuming a thread with nothing pending returns `410`.
 - **Validation** removes invented `[doc:…]` citations and marks bare document ids the evidence cannot back
   as "(unverified reference)".
 - **MCP** is a real Model Context Protocol server (`mcp_server/main.py`, official `mcp` SDK / FastMCP, Streamable

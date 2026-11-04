@@ -78,6 +78,7 @@ _DEFAULTS = {
     "events": [],
     "hitl_token": None,
     "hitl_decision": None,  # "approved" / "sent back" / "set aside" for the current turn (Approval chip)
+    "hitl_note_missing": False,  # Send back was clicked with an empty note; show the reminder
     "feedback_given": {},
     "feedback_pending": None,  # message index whose 👎 is waiting for an optional comment
     "pending_prompt": None,
@@ -650,6 +651,7 @@ def run_turn(prompt: str) -> None:
 
 
 def decide_hitl(approved: bool, note: str) -> None:
+    st.session_state.hitl_note_missing = False
     try:
         r = httpx.post(
             f"{API_BASE}/chat/hitl",
@@ -810,7 +812,8 @@ with col_chat:
             ui.kicker("Needs your OK")
             st.markdown(
                 "**Please review this answer before it goes out.** "
-                "Approve it as is, or send it back with a short note and I'll rewrite it."
+                "Approve it as is, or send it back and I'll rewrite it. "
+                "To send it back, say what should change: the note is what the rewrite is based on."
             )
             # Keyed by draft count so the box starts empty for each new draft instead of carrying
             # the previous send back note into the next decision. (The token is a JWT, so its
@@ -818,18 +821,25 @@ with col_chat:
             draft_no = sum(1 for m in st.session_state.messages if m["role"] == "assistant" and (m.get("hitl_required") or m.get("superseded")))
             note_key = f"hitl_note_{len(st.session_state.messages)}_{draft_no}"
             st.text_input(
-                "Note (optional)",
+                "Note (required to send back, optional to approve)",
                 key=note_key,
                 label_visibility="collapsed",
-                placeholder="What should change? e.g. lead with the root causes",
+                placeholder="Required to send back. What should change? e.g. lead with the root causes",
             )
             a1, a2 = st.columns(2)
             if a1.button("Approve", type="primary", use_container_width=True, icon=":material/check:"):
                 decide_hitl(True, st.session_state.get(note_key, ""))
                 st.rerun()
             if a2.button("Send back", use_container_width=True, icon=":material/undo:"):
-                decide_hitl(False, st.session_state.get(note_key, ""))
-                st.rerun()
+                note_text = (st.session_state.get(note_key, "") or "").strip()
+                if not note_text:
+                    st.session_state.hitl_note_missing = True
+                else:
+                    st.session_state.hitl_note_missing = False
+                    decide_hitl(False, note_text)
+                    st.rerun()
+            if st.session_state.get("hitl_note_missing"):
+                st.warning("Add a note first. Tell me what should change and I'll rewrite the draft from it.")
         # Extra space so the card clears the pinned composer even before CSS catches up.
         st.markdown('<div style="height: 4.5rem"></div>', unsafe_allow_html=True)
 

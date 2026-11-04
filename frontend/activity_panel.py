@@ -308,7 +308,7 @@ def describe_event(ev: dict[str, Any]) -> Described:
 
     if et == "hitl":
         preview = (d.get("draft_preview") or "").strip()
-        lines = ["Use **Approve** or **Send back** in the chat."]
+        lines = ["Use **Approve** or **Send back** in the chat. Send back needs a note saying what should change."]
         if preview:
             one_line = " ".join(preview.split())[:200]
             lines.append(f"> Draft preview: {one_line}{'…' if len(preview) > 200 else ''}")
