@@ -132,13 +132,18 @@ _CSS_SPLIT = """
      width in pixels from it, so a width on stChatInput alone leaves the textarea full width. */
   [data-testid="stBottomBlockContainer"] > [data-testid="stVerticalBlockBorderWrapper"] { width: calc(55.5556% - 2rem); }
 
-  /* Activity panel column stays in view while the chat scrolls. It is found via the keyed
-     container inside it, so nested columns (feedback, approval buttons) are not affected. The
-     height leaves room for the pinned composer plus page padding, so the panel is never pushed
-     up (and its header cut off) when the chat is scrolled to the very bottom. */
+  /* Three panes, three scrolls. The sidebar scrolls on its own (Streamlit default). The chat
+     scrolls with the main section, which keeps Streamlit's native scroll-to-bottom while an
+     answer streams. The activity panel is a sticky pane of fixed height with its own scrollbar
+     and a divider, so it never moves with the chat. It is found via the keyed container inside
+     it, so nested columns (feedback, approval buttons) are not affected. The height leaves room
+     for the pinned composer plus page padding, so the panel is never pushed up when the chat is
+     scrolled to the very bottom. */
   [data-testid="stColumn"]:has(.st-key-activity) {
     position: sticky; top: 0.5rem; align-self: flex-start;
-    max-height: calc(100vh - 8.5rem); overflow-y: auto; padding-bottom: 1rem;
+    height: calc(100vh - 8.5rem); overflow-y: auto; overscroll-behavior: contain;
+    border-left: 1px solid #E6EBF0; padding-left: 1.5rem; padding-bottom: 1rem;
+    scrollbar-width: thin; scrollbar-color: #D5DDE3 transparent;
   }
 }
 </style>

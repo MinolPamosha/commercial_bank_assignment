@@ -80,6 +80,9 @@ away, 👍/👎 feedback (👎 asks for an optional comment, stored in long-term
 **New chat** plus a **Recent** list in the sidebar (reopening a chat continues the same backend memory
 thread), a connection line (retrieval mode, LangSmith on/off) and a **Show how answers are produced**
 toggle. The panel is on by default; turning it off gives a centred, reading-width chat for focused use.
+Three panes, three scrolls: the sidebar and the activity panel each scroll independently behind
+their own divider, while the chat scrolls with the page so Streamlit's native scroll-to-bottom keeps
+following the answer as it streams.
 
 **A browser refresh does not sign you out or lose the conversation.** Streamlit's `session_state`
 belongs to one tab's websocket session and is wiped on reload, so signed-in UI sessions are also
