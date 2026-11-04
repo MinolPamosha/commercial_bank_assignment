@@ -83,6 +83,7 @@ class ChatResponse(BaseModel):
     hitl_token: Optional[str] = None
     degraded: bool = False
     degradation_reason: Optional[str] = None
+    blocked: bool = False  # input guardrail rejected the turn before the graph ran
 
 
 class HitlDecision(BaseModel):

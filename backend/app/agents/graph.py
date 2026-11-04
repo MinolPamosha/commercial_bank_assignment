@@ -142,6 +142,7 @@ def _build_result(final: dict[str, Any], events: list[AgentEvent], session_id: s
         "hitl_required": bool(final.get("hitl_required")),
         "degraded": bool(final.get("degraded")),
         "degradation_reason": final.get("degradation_reason"),
+        "blocked": False,
         "session_id": session_id,
         "active_node": final.get("active_node"),
         "validation_notes": final.get("validation_notes") or [],

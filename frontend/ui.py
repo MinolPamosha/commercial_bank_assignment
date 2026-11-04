@@ -271,13 +271,18 @@ def welcome(first_name: str) -> str:
     )
 
 
+def _plain_title(title: str) -> str:
+    """Drop typographic dashes so titles read as plain product copy, not generated prose."""
+    return title.replace("—", ":").replace("–", "-").strip()
+
+
 def source_pills(citations: list[dict]) -> str:
     """One chip per cited document (deduplicated, order kept): id, then title in a quieter tone."""
     seen: dict[str, str] = {}
     for c in citations:
         doc_id = str(c.get("doc_id") or "")
         if doc_id and doc_id not in seen:
-            seen[doc_id] = str(c.get("title") or "")
+            seen[doc_id] = _plain_title(str(c.get("title") or ""))
     pills = "".join(
         f'<span class="apx-pill" title="{html.escape(title)}">📄 <span class="id">{html.escape(doc_id)}</span>'
         + (f'<span class="t">{html.escape(title)}</span>' if title else "")

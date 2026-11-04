@@ -88,6 +88,7 @@ def _finalize_turn(result: dict[str, Any], body: ChatRequest, user: dict[str, An
         hitl_token=hitl_token,
         degraded=bool(result.get("degraded")),
         degradation_reason=result.get("degradation_reason"),
+        blocked=bool(result.get("blocked")),
     )
 
 
@@ -200,6 +201,7 @@ async def hitl_decide(body: HitlDecision, user=Depends(get_current_user)):
         hitl_token=hitl_token,
         degraded=bool(result.get("degraded")),
         degradation_reason=result.get("degradation_reason"),
+        blocked=False,
     )
 
 
