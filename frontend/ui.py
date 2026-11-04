@@ -15,6 +15,7 @@ from __future__ import annotations
 import html
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 ACCENT = "#1F7A6D"
 
@@ -125,6 +126,11 @@ section[data-testid="stSidebar"] [class*="st-key-chat-"] button:disabled { opaci
 # (≈ 55.56%) minus the "large" 2rem gap; the composer block is given the same width so it sits
 # under the conversation, not under the panel. Below Streamlit's 640px breakpoint the columns
 # stack and the composer goes full width.
+#
+# Scroll model (desktop): two equal-height panes, each with its own scroll — no page scrollbar
+# fighting the panel. Soft overlay scrollbars (visible on hover). A tiny helper script keeps the
+# chat pane pinned to the latest message while an answer streams (Streamlit's native scroll-to-
+# bottom only moves the page, which we have locked).
 _CSS_SPLIT = """
 <style>
 @media (min-width: 641px) {
@@ -132,21 +138,92 @@ _CSS_SPLIT = """
      width in pixels from it, so a width on stChatInput alone leaves the textarea full width. */
   [data-testid="stBottomBlockContainer"] > [data-testid="stVerticalBlockBorderWrapper"] { width: calc(55.5556% - 2rem); }
 
-  /* Three panes, three scrolls. The sidebar scrolls on its own (Streamlit default). The chat
-     scrolls with the main section, which keeps Streamlit's native scroll-to-bottom while an
-     answer streams. The activity panel is a sticky pane of fixed height with its own scrollbar
-     and a divider, so it never moves with the chat. It is found via the keyed container inside
-     it, so nested columns (feedback, approval buttons) are not affected. The height leaves room
-     for the pinned composer plus page padding, so the panel is never pushed up when the chat is
-     scrolled to the very bottom. */
+  /* Lock the page: the two panes own scrolling, the composer stays pinned underneath. */
+  [data-testid="stAppScrollToBottomContainer"] { overflow: hidden !important; height: 100vh; }
+  section.stMain { height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+  section.stMain .block-container {
+    flex: 1 1 auto; min-height: 0; overflow: hidden;
+    padding-top: 0.75rem !important; padding-bottom: 0 !important;
+  }
+
+  /* One row, viewport-tall, both columns stretch and scroll on their own. */
+  [data-testid="stHorizontalBlock"]:has(.st-key-activity) {
+    height: calc(100vh - 7.25rem);
+    max-height: calc(100vh - 7.25rem);
+    align-items: stretch !important;
+  }
+  [data-testid="stHorizontalBlock"]:has(.st-key-activity) > [data-testid="stColumn"] {
+    height: 100% !important;
+    max-height: 100%;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    align-self: stretch !important;
+    padding-bottom: 0.5rem;
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  [data-testid="stHorizontalBlock"]:has(.st-key-activity) > [data-testid="stColumn"]:hover,
+  [data-testid="stHorizontalBlock"]:has(.st-key-activity) > [data-testid="stColumn"]:focus-within {
+    scrollbar-color: #C5CED6 transparent;
+  }
+  [data-testid="stHorizontalBlock"]:has(.st-key-activity) > [data-testid="stColumn"]::-webkit-scrollbar { width: 6px; }
+  [data-testid="stHorizontalBlock"]:has(.st-key-activity) > [data-testid="stColumn"]::-webkit-scrollbar-thumb {
+    background: transparent; border-radius: 4px;
+  }
+  [data-testid="stHorizontalBlock"]:has(.st-key-activity) > [data-testid="stColumn"]:hover::-webkit-scrollbar-thumb {
+    background: #C5CED6;
+  }
+
+  /* Panel: divider only — height/scroll come from the shared row rule above. */
   [data-testid="stColumn"]:has(.st-key-activity) {
-    position: sticky; top: 0.5rem; align-self: flex-start;
-    height: calc(100vh - 8.5rem); overflow-y: auto; overscroll-behavior: contain;
-    border-left: 1px solid #E6EBF0; padding-left: 1.5rem; padding-bottom: 1rem;
-    scrollbar-width: thin; scrollbar-color: #D5DDE3 transparent;
+    border-left: 1px solid #E6EBF0;
+    padding-left: 1.5rem;
   }
 }
 </style>
+"""
+
+# Runs in a hidden iframe; reaches the app DOM via window.parent. Keeps the chat pane following
+# new tokens/messages when the user is already near the bottom (ChatGPT-style).
+_SCROLL_HELPER = """
+<script>
+(function () {
+  const doc = window.parent.document;
+  if (doc.documentElement.dataset.apxScrollHelper === "1") return;
+  doc.documentElement.dataset.apxScrollHelper = "1";
+
+  function panes() {
+    const row = doc.querySelector('[data-testid="stHorizontalBlock"]:has(.st-key-activity)');
+    if (!row) return {};
+    const cols = Array.from(row.querySelectorAll(':scope > [data-testid="stColumn"]'));
+    const panel = cols.find((c) => c.querySelector(".st-key-activity"));
+    const chat = cols.find((c) => c !== panel);
+    return { chat, panel };
+  }
+
+  function stickBottom(el) {
+    if (!el) return;
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (gap < 140 || el.dataset.apxForce === "1") {
+      el.scrollTop = el.scrollHeight;
+      el.dataset.apxForce = "0";
+    }
+  }
+
+  const obs = new MutationObserver(function () {
+    const { chat, panel } = panes();
+    stickBottom(chat);
+    stickBottom(panel);
+  });
+  obs.observe(doc.body, { childList: true, subtree: true, characterData: true });
+  setTimeout(function () {
+    const { chat } = panes();
+    if (chat) { chat.dataset.apxForce = "1"; stickBottom(chat); }
+  }, 250);
+})();
+</script>
 """
 
 # Focus layout (panel hidden): one reading-width column centred on the page, composer aligned to it.
@@ -162,6 +239,9 @@ def inject_css(*, focus: bool = False) -> None:
     """Base styles plus the rules for the current layout (split with the panel, or focus without)."""
     st.markdown(_CSS, unsafe_allow_html=True)
     st.markdown(_CSS_FOCUS if focus else _CSS_SPLIT, unsafe_allow_html=True)
+    if not focus:
+        # Hidden iframe → parent DOM. Only needed when the two-pane scroll lock is active.
+        components.html(_SCROLL_HELPER, height=0, width=0)
 
 
 def welcome(first_name: str) -> str:

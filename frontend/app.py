@@ -366,7 +366,9 @@ with st.sidebar:
                     st.rerun()
 
 show_panel = bool(st.session_state.get("show_panel", True))
-ui.inject_css(focus=not show_panel)
+# Split-pane scroll lock only when signed in with the activity panel on; the welcome screen
+# and focus mode keep normal page scroll.
+ui.inject_css(focus=not (bool(st.session_state.token) and show_panel))
 
 
 # --- Screen 1: signed out → one welcome card -----------------------------------------
