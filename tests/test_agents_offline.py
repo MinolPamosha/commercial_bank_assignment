@@ -3,7 +3,10 @@ validation, theme analysis, and the heuristic router."""
 
 from backend.app.agents.llm import heuristic_intent
 from backend.app.agents.research_agent import deterministic_plan, validate_plan
+from backend.app.agents.response_agent import _is_greeting
 from backend.app.agents.supervisor import _validate_decision
+from backend.app.agents.validation import validate_node
+from backend.app.memory.store import MemoryStore
 from backend.app.tools.catalog import TOOL_NAMES, catalog_for_prompt
 from backend.app.tools.python_analysis import DEFAULT_THEME_PATTERNS, analyze_themes
 
@@ -79,3 +82,54 @@ def test_theme_analysis_counts_each_snippet_once_and_escapes_keywords():
     assert res["theme_counts"]["idempotency"] == 1
     assert res["documents_analyzed"] == 3
     assert "regex_injection" in res["facets"]  # "(" was escaped, not treated as regex
+
+
+# --- Multi-turn conversation -------------------------------------------------------------
+
+_POLICY = {"doc_id": "POL-OPS-04", "title": "Customer Remediation", "snippet": "Freeze ledger entries within 30 minutes."}
+
+
+async def test_follow_up_from_memory_keeps_citations_seen_earlier_in_session():
+    """Turn 2 ran no retrieval (route=respond) but cites the document turn 1 retrieved."""
+    out = await validate_node(
+        {
+            "draft_answer": "The first step must happen within 30 minutes [doc:POL-OPS-04].",
+            "citations": [],
+            "prior_citations": [_POLICY],
+            "intent": "qa",
+        }
+    )
+    assert "[citation-removed]" not in out["final_answer"]
+    assert out["validation_ok"] is True
+    assert [c["doc_id"] for c in out["citations"]] == ["POL-OPS-04"]  # surfaced as this turn's source
+    assert any("earlier in this conversation" in e.message for e in out["events"])
+
+
+async def test_follow_up_still_strips_documents_never_seen_in_session():
+    out = await validate_node(
+        {
+            "draft_answer": "See [doc:POL-OPS-04] and [doc:INC-2099-0001].",
+            "citations": [],
+            "prior_citations": [_POLICY],
+            "intent": "qa",
+        }
+    )
+    assert "[doc:POL-OPS-04]" in out["final_answer"]
+    assert "[doc:INC-2099-0001]" not in out["final_answer"]
+
+
+def test_session_memory_remembers_cited_documents_across_turns():
+    store = MemoryStore()
+    store.remember_citations("s1", "u1", [_POLICY, {"doc_id": "INC-2025-0033", "title": "NEFT dup"}])
+    store.remember_citations("s1", "u1", [{**_POLICY, "score": 0.9}])  # same doc again → one entry, latest wins
+    docs = store.session_citations("s1", "u1")
+    assert [d["doc_id"] for d in docs] == ["POL-OPS-04", "INC-2025-0033"]
+    assert docs[0]["score"] == 0.9
+    assert store.session_citations("other-session", "u1") == []  # scoped per session
+
+
+def test_canned_greeting_only_for_a_real_opener():
+    assert _is_greeting("hi", "")
+    assert _is_greeting("Thanks!", "")
+    assert not _is_greeting("Say that in one sentence.", "")
+    assert not _is_greeting("thanks", "USER: hi\nASSISTANT: Hello!")  # mid-conversation → the model replies

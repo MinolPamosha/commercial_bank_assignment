@@ -25,13 +25,35 @@ from backend.app.security.guardrails import check_citations
 REJECTED_ANSWER = "A human reviewer rejected this answer. Please rephrase your question or contact your team lead."
 
 
+def _referenced(answer: str, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The subset of `citations` whose document id the answer mentions (as [doc:ID] or bare)."""
+    return [c for c in citations if c.get("doc_id") and re.search(rf"\b{re.escape(str(c['doc_id']))}\b", answer)]
+
+
 async def validate_node(state: AgentState) -> dict:
     events = [AgentEvent(event_type="node", node="validate", message="Validating response & citations")]
     notes: list[str] = []
     answer = state.get("draft_answer") or state.get("final_answer") or ""
-    citations = state.get("citations") or []
+    citations = list(state.get("citations") or [])
 
-    cite_check = check_citations(answer, citations)
+    # Multi-turn grounding: a follow-up answered from conversation memory ran no retrieval, so
+    # `citations` is empty, yet it may rightly point back at documents cited earlier in this
+    # session. Those count as known evidence, and the ones the answer uses become its sources.
+    prior = [c for c in (state.get("prior_citations") or []) if c.get("doc_id") not in {x.get("doc_id") for x in citations}]
+    if not citations and prior:
+        carried = _referenced(answer, prior)
+        if carried:
+            citations = carried
+            events.append(
+                AgentEvent(
+                    event_type="validation",
+                    node="validate",
+                    message="Follow-up grounded on documents from earlier in this conversation",
+                    detail={"doc_ids": [c["doc_id"] for c in carried]},
+                )
+            )
+
+    cite_check = check_citations(answer, citations + prior)
     ok = cite_check.ok
     if not ok:
         notes.extend(cite_check.reasons)
@@ -81,6 +103,7 @@ async def validate_node(state: AgentState) -> dict:
         "validation_ok": ok,
         "validation_notes": notes,
         "final_answer": answer,
+        "citations": citations,
         "hitl_required": needs_human,
         "events": events,
         "route": route,

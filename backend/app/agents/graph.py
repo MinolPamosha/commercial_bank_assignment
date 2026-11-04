@@ -285,11 +285,12 @@ async def _stream_turn(
 
     _traced_memory_update(session_id, user_id, "user", guard.sanitized_text)
     memory_context = _traced_memory_load(session_id, user_id)
+    prior_citations = memory_store.session_citations(session_id, user_id)
     mem_event = AgentEvent(
         event_type="memory",
         node="memory",
         message="Loaded session + long-term memory context",
-        detail={"chars": len(memory_context)},
+        detail={"chars": len(memory_context), "known_docs": [c.get("doc_id") for c in prior_citations]},
     )
     events.append(mem_event)
     yield {"type": "event", "event": mem_event}
@@ -302,6 +303,7 @@ async def _stream_turn(
         "raw_message": message,
         "message": guard.sanitized_text,
         "memory_context": memory_context,
+        "prior_citations": prior_citations,
         "events": [],  # pre-graph events are tracked locally; keeps the panel scoped to this turn
         "errors": [],
         "degraded": False,
@@ -328,6 +330,7 @@ async def _stream_turn(
 
     result = _build_result(final, events, session_id)
     _traced_memory_update(session_id, user_id, "assistant", result["answer"])
+    memory_store.remember_citations(session_id, user_id, result["citations"])
     if final.get("intent") == "research" and final.get("research_topic"):
         memory_store.remember_topic(user_id, final["research_topic"])
     yield {"type": "result", "result": result}

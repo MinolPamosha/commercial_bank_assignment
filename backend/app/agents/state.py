@@ -32,6 +32,9 @@ class AgentState(TypedDict, total=False):
 
     # Memory
     memory_context: str
+    # Documents cited earlier in this session. Follow-ups answered from memory may reference
+    # them; validation treats them as grounded and surfaces the ones the answer actually uses.
+    prior_citations: list[dict[str, Any]]
 
     # Output
     draft_answer: str

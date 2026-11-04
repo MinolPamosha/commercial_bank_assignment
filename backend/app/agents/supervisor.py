@@ -55,6 +55,7 @@ Routing rules:
   current/open incident tickets) or a calculation. Set "tool" and "tool_params".
 - "respond": greetings/small talk, OR a follow-up that can be answered from the conversation
   memory below without new evidence (e.g. "which one was most common?", "say that shorter").
+  Intent "chitchat" is only for greetings/thanks; a follow-up about earlier answers is "qa".
 - Always pick "tools" when a catalog tool clearly fits, regardless of the user's role; authorization
   is enforced downstream and must stay visible.
 

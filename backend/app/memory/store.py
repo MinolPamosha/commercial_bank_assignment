@@ -7,6 +7,11 @@ Why not dump full history into the LLM every turn?
 - Cost & latency grow linearly.
 - RLM-style agents already fetch evidence on demand.
 - We keep a compact summary + last 6 turns for coherence.
+
+Evidence continuity: the session also remembers which documents were cited so far. A follow-up
+answered from memory ("what was the time limit for step 1?") may legitimately reference those
+documents even though no retrieval ran this turn; without this the citation guardrail would
+strip them as hallucinated.
 """
 
 from __future__ import annotations
@@ -36,7 +41,11 @@ class SessionMemory:
     user_id: str
     turns: list[Turn] = field(default_factory=list)
     summary: str = ""
-    relevant_docs: list[str] = field(default_factory=list)
+    # doc_id → citation dict (title, metadata, snippet) for every document cited in this session.
+    cited_docs: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+MAX_CITED_DOCS_PER_SESSION = 40
 
 
 class MemoryStore:
@@ -88,6 +97,20 @@ class MemoryStore:
         for t in mem.turns[-6:]:
             lines.append(f"{t.role.upper()}: {t.content}")
         return "\n".join(lines)
+
+    def remember_citations(self, session_id: str, user_id: str, citations: list[dict[str, Any]]) -> None:
+        """Keep the documents cited this turn so later follow-ups can be validated against them."""
+        mem = self.get_session(session_id, user_id)
+        for c in citations:
+            doc_id = str(c.get("doc_id") or "")
+            if doc_id:
+                mem.cited_docs[doc_id] = dict(c)
+        while len(mem.cited_docs) > MAX_CITED_DOCS_PER_SESSION:  # drop the oldest first
+            mem.cited_docs.pop(next(iter(mem.cited_docs)))
+
+    def session_citations(self, session_id: str, user_id: str) -> list[dict[str, Any]]:
+        """Documents already shown to the user in this session (most recent last)."""
+        return list(self.get_session(session_id, user_id).cited_docs.values())
 
     def remember_topic(self, user_id: str, topic: str) -> None:
         entry = self._long_term.setdefault(user_id, {"preferences": "", "topics": [], "feedback": []})
