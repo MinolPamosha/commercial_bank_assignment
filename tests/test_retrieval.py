@@ -68,6 +68,23 @@ async def test_knowledge_search_applies_access_level_by_role(ready_retriever):
     assert all(r["metadata"]["access_level"] in {"public", "internal"} for r in viewer["results"])
 
 
+async def test_restricted_document_is_visible_to_administrators_only(ready_retriever):
+    """Three data tiers, three roles: the board paper (restricted) reaches the administrator,
+    while analyst (cap: confidential) and viewer (cap: internal) never see it or its figures."""
+    q = "board risk committee regulator supervisory findings penalty BOARD-2025-04-REG-FINDINGS"
+    admin = await knowledge_search(q, role=Role.ADMINISTRATOR)
+    analyst = await knowledge_search(q, role=Role.ANALYST)
+    viewer = await knowledge_search(q, role=Role.VIEWER)
+    assert admin["ok"] and analyst["ok"] and viewer["ok"]
+    assert "BOARD-2025-04-REG-FINDINGS" in {r["doc_id"] for r in admin["results"]}
+    for res in (analyst, viewer):
+        assert "BOARD-2025-04-REG-FINDINGS" not in {r["doc_id"] for r in res["results"]}
+        assert all(r["metadata"]["access_level"] != "restricted" for r in res["results"])
+        assert "4.2 crore" not in " ".join(r["snippet"] for r in res["results"])
+        assert res["dropped_chunks"]["access_level"] >= 1  # the withholding is reported, not silent
+    assert all(r["metadata"]["access_level"] in {"public", "internal"} for r in viewer["results"])
+
+
 async def test_retrieval_agent_metadata_hints_do_not_exclude_other_departments(ready_retriever):
     """'payments' in the question used to become a hard department filter, which hid the risk
     team's meeting notes. Hints are now a soft preference merged with an unfiltered search."""

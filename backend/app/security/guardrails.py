@@ -143,7 +143,7 @@ def validate_retrieved_content(chunks: list[dict], role: Role) -> list[dict]:
 
 # Corpus document-id shapes (INC-2025-0142, POL-INFOSEC-02, RB-PAY-017, ARCH-PAY-001, MEET-2025-02-RISK…).
 # Used to catch invented ids that the model writes *without* the [doc:…] wrapper.
-DOC_ID_PATTERN = re.compile(r"\b(?:INC|POL|RB|ARCH|PROD|MEET)-[A-Z0-9][A-Z0-9-]{2,}\b")
+DOC_ID_PATTERN = re.compile(r"\b(?:INC|POL|RB|ARCH|PROD|MEET|BOARD)-[A-Z0-9][A-Z0-9-]{2,}\b")
 
 
 def check_citations(answer: str, citations: list[dict], grounded_ids: set[str] | None = None) -> GuardrailResult:

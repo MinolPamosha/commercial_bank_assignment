@@ -41,7 +41,7 @@ Tests (offline — no API keys, no network; stub LLM, local hybrid index, unreac
 
 ```bash
 pip install -r requirements-dev.txt
-pytest            # 55 tests: guardrails, sandbox escapes, RBAC, rate limit, retrieval, agents, graph + API flows, MCP protocol
+pytest            # 77 tests: guardrails, sandbox escapes, RBAC + three access tiers, rate limit, retrieval, agents, graph + API flows, MCP protocol
 ```
 
 ## Demo users
@@ -131,6 +131,10 @@ also forgets preferences and feedback).
   a note is refused (`422`) in the API and blocked in the UI, since the note is what the rewrite is based on.
   Each revised draft appears as a new message under the one it replaces, which collapses into
   "Earlier draft (sent back)". Resuming a thread with nothing pending returns `410`.
+  The checkpointer is LangGraph's in-process `MemorySaver` (single-replica POC), so a draft that is
+  waiting for approval does not survive an API restart: Approve/Send back then returns `410` with a
+  plain-language message and the user simply asks again. Swap in `langgraph-checkpoint-postgres` (or
+  Redis) in `graph.py` for durable, multi-replica HITL.
 - **Validation** removes invented `[doc:…]` citations and marks bare document ids the evidence cannot back
   as "(unverified reference)".
 - **MCP** is a real Model Context Protocol server (`mcp_server/main.py`, official `mcp` SDK / FastMCP, Streamable
@@ -138,7 +142,12 @@ also forgets preferences and feedback).
   (`backend/app/tools/mcp_client.py`); `GET /health` and `/rest/<tool>` mirrors are there for curl only.
 - **Retrieved content is screened** before it reaches the LLM: chunks above the caller's access level and chunks
   carrying instruction-override text (indirect prompt injection) are dropped, and the drop shows up as a
-  `guardrail` event. The Python analysis sandbox allowlists AST nodes *and* names/attributes, so
+  `guardrail` event. The corpus carries all three tiers so each role's ceiling is demonstrable: viewer →
+  `internal` only; analyst → adds `confidential` (`INC-2025-0033`, `INC-2025-0142`, `MEET-2025-02-RISK`);
+  administrator → adds `restricted` (`BOARD-2025-04-REG-FINDINGS`, the board paper on the regulator's
+  findings). Ask "What penalty did the regulator propose after the payments incidents?" as each user:
+  the administrator gets the figure, the others are told the passages were withheld
+  (`test_restricted_document_is_visible_to_administrators_only`). The Python analysis sandbox allowlists AST nodes *and* names/attributes, so
   `__class__`/`__subclasses__` introspection chains are rejected (`tests/test_guardrails.py`).
 
 ## LangSmith trace shape

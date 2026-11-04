@@ -133,6 +133,7 @@ async def retrieval_node(state: AgentState) -> dict:
         "active_node": "retrieval",
         "retrieval_results": result.get("results") or [],
         "citations": citations,
+        "withheld_chunks": {k: int(v or 0) for k, v in dropped.items()},
         "events": events,
         "errors": errors,
         "degraded": state.get("degraded", False) or degraded,

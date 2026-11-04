@@ -166,6 +166,17 @@ async def test_ticket_ids_returned_by_a_tool_are_not_flagged_as_unverified():
     assert "INC-2031-0001 (unverified" in answer  # still caught when neither documents nor tools back it
 
 
+def test_access_notice_is_role_aware_and_never_describes_the_withheld_text():
+    from backend.app.agents.response_agent import _access_notice
+    from backend.app.models.schemas import Role
+
+    viewer = _access_notice(3, Role.VIEWER)
+    analyst = _access_notice(1, Role.ANALYST)
+    assert "3 relevant passage(s)" in viewer and "viewer role" in viewer and "analyst or administrator" in viewer
+    assert "analyst role" in analyst and "an administrator can access it" in analyst
+    assert "Do not speculate" in viewer
+
+
 async def test_id_echoed_from_the_question_is_not_flagged_but_still_not_citable():
     """A viewer asks about a confidential incident, retrieval withholds it, and the answer says so.
     Echoing the id the user typed is not a hallucination; citing it as evidence still is."""

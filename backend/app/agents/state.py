@@ -29,6 +29,9 @@ class AgentState(TypedDict, total=False):
     research_batches: list[dict[str, Any]]
     tool_results: list[dict[str, Any]]
     citations: list[dict[str, Any]]
+    # Chunks the content guardrail removed this turn ({"access_level": n, "embedded_injection": m}),
+    # so the Response agent can say "relevant material exists above your access level" honestly.
+    withheld_chunks: dict[str, int]
 
     # Memory
     memory_context: str

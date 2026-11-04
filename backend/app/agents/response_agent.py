@@ -37,6 +37,18 @@ def _greeting_reply(message: str, memory_context: str, assistant_name: str, bank
     return f"Hello! I'm the {assistant_name} for {bank_name}. Ask me about policies, incidents, runbooks, or architecture."
 
 
+def _access_notice(withheld: int, role) -> str:
+    """Role-aware wording for 'some evidence sits above your clearance'. Viewers are pointed to an
+    analyst or administrator; analysts (capped at confidential) only to an administrator."""
+    role_name = getattr(role, "value", str(role or "viewer"))
+    who = "an administrator" if role_name == "analyst" else "an analyst or administrator"
+    return (
+        f"{withheld} relevant passage(s) were withheld because they are classified above the {role_name} "
+        f"role's access level. Tell the user this exists but is not available to their role and that "
+        f"{who} can access it. Do not speculate about what the withheld material says."
+    )
+
+
 async def response_node(state: AgentState) -> dict:
     settings = get_settings()
     events = [AgentEvent(event_type="node", node="response", message="Response agent composing final answer")]
@@ -52,6 +64,11 @@ async def response_node(state: AgentState) -> dict:
             {"doc_id": c.get("doc_id"), "title": c.get("title")} for c in state.get("prior_citations") or []
         ],
     }
+    # Honest "not for your role" signal: the guardrail removed relevant passages above the caller's
+    # ceiling. Only the count and the role reach the model, never the withheld text or ids.
+    withheld = int((state.get("withheld_chunks") or {}).get("access_level") or 0)
+    if withheld:
+        evidence["access_notice"] = _access_notice(withheld, state.get("role"))
 
     # Canned reply for pure small talk ("hi", "hello again", "thanks"), whatever the supervisor
     # labelled it. A short follow-up in an ongoing conversation ("say that shorter") has no
@@ -90,7 +107,9 @@ async def response_node(state: AgentState) -> dict:
                 "user's role is not authorized for that data and suggest contacting an analyst/administrator — "
                 "do not guess the data. When answering from tool_results, copy names, ids and e-mail addresses "
                 "exactly as they appear in the data. If a tool failed or timed out, say live data is unavailable right now. "
-                "If the question is a follow-up, answer from the memory block. If evidence is weak, say what is missing."
+                "If the question is a follow-up, answer from the memory block. If evidence is weak, say what is missing. "
+                "If evidence has an access_notice, follow it: state that relevant material exists above the user's "
+                "access level and who can access it, instead of saying nothing exists."
             )
         try:
             answer = await acomplete(

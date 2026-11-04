@@ -344,6 +344,7 @@ async def _stream_turn(
         "research_batches": [],
         "tool_results": [],
         "citations": [],
+        "withheld_chunks": {},
         "validation_notes": [],
         "selected_tool": None,
         "tool_params": {},
