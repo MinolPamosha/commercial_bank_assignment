@@ -69,6 +69,11 @@ def heuristic_intent(message: str) -> tuple[str, str]:
     m = message.lower()
     if any(k in m for k in ("summarize all", "recurring", "root cause", "across", "last year", "batch")):
         return "research", "research"
+    # Counting / averaging over the written reports is document analysis, not a live ticket lookup.
+    if any(k in m for k in ("how many", "average", "count", "calculate", "statistics")) and any(
+        k in m for k in ("incident", "outage", "report", "document", "polic")
+    ):
+        return "research", "research"
     if any(k in m for k in ("employee", "who is", "on call", "on-call", "directory", "service catalog", "open incident", "incident record")):
         return "tool", "tools"
     if any(k in m for k in ("reindex", "admin", "export feedback")):

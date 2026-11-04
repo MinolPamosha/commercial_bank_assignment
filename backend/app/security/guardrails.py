@@ -146,7 +146,7 @@ def validate_retrieved_content(chunks: list[dict], role: Role) -> list[dict]:
 DOC_ID_PATTERN = re.compile(r"\b(?:INC|POL|RB|ARCH|PROD|MEET)-[A-Z0-9][A-Z0-9-]{2,}\b")
 
 
-def check_citations(answer: str, citations: list[dict]) -> GuardrailResult:
+def check_citations(answer: str, citations: list[dict], grounded_ids: set[str] | None = None) -> GuardrailResult:
     """Flag document references the retrieved evidence cannot back.
 
     Two checks:
@@ -154,9 +154,12 @@ def check_citations(answer: str, citations: list[dict]) -> GuardrailResult:
     - bare document ids (e.g. "INC-2025-0999") that appear neither as a retrieved document
       nor inside any retrieved snippet → unverified_ids. Ids mentioned *inside* evidence text
       (an incident report referencing a related incident) are grounded and allowed.
+
+    `grounded_ids` are identifiers that came from another trusted source this turn, typically
+    the records a live MCP tool returned (an open ticket id is real even if no document mentions it).
     """
     known = {str(c.get("doc_id") or c.get("id") or "") for c in citations}
-    mentioned_in_evidence: set[str] = set()
+    mentioned_in_evidence: set[str] = set(grounded_ids or ())
     for c in citations:
         mentioned_in_evidence.update(DOC_ID_PATTERN.findall(str(c.get("snippet") or "")))
 

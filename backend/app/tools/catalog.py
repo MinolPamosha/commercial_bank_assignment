@@ -46,7 +46,7 @@ TOOL_CATALOG: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name="python_analysis",
-        description="Structured/quantitative analysis over retrieved evidence or a small arithmetic expression.",
+        description="Safe arithmetic expression evaluator for standalone calculations. (Statistics over the documents are done by the research route, which calls this tool itself.)",
         route="tools",
         params={"expression": "safe Python expression to evaluate (optional)"},
     ),

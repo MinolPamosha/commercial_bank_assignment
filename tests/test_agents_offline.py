@@ -37,6 +37,9 @@ def test_heuristic_router_covers_demo_questions():
     assert heuristic_intent("Who is on call for the payments team right now?")[1] == "tools"
     assert heuristic_intent("Show me the service catalog")[1] == "tools"
     assert heuristic_intent("What does the remediation policy require?")[1] == "retrieve"
+    # Counting over the written reports is document analysis (research + python_analysis), not a ticket lookup.
+    assert heuristic_intent("How many incidents in the reports were SEV-1 and what was the average duration?")[1] == "research"
+    assert heuristic_intent("List the open incident records for payments")[1] == "tools"
     assert heuristic_intent("hello")[1] == "respond"
 
 
@@ -139,6 +142,28 @@ async def test_identifiers_in_tool_answers_are_snapped_to_the_mcp_data():
     assert "E1888" in answer and "E1888 (unverified)" not in answer  # exact match left alone
     flags = next(e.detail for e in out["events"] if e.message.startswith("Corrected identifiers"))
     assert flags["corrected_identifiers"] == {"thariindu.silva@apexbank.example": "tharindu.silva@apexbank.example"}
+
+
+async def test_ticket_ids_returned_by_a_tool_are_not_flagged_as_unverified():
+    """An open-ticket id that only exists in the MCP incident system is real evidence: no document
+    mentions it, but the tool returned it, so the validator must leave it untouched."""
+    tool_results = [
+        {
+            "tool": "mcp_incident_records",
+            "result": {"ok": True, "data": {"incidents": [{"id": "INC-2025-0999", "status": "open", "severity": "SEV-3"}]}},
+        }
+    ]
+    out = await validate_node(
+        {
+            "draft_answer": "One open incident: INC-2025-0999 (SEV-3). A made-up one: INC-2031-0001.",
+            "citations": [],
+            "tool_results": tool_results,
+            "intent": "tool",
+        }
+    )
+    answer = out["final_answer"]
+    assert "INC-2025-0999 (unverified" not in answer
+    assert "INC-2031-0001 (unverified" in answer  # still caught when neither documents nor tools back it
 
 
 async def test_identifier_repair_is_a_no_op_without_tool_data():
@@ -250,8 +275,15 @@ def test_delete_all_chats_optionally_forgets_long_term_memory(tmp_path):
     assert "u1" not in store._long_term
 
 
-def test_canned_greeting_only_for_a_real_opener():
-    assert _is_greeting("hi", "")
-    assert _is_greeting("Thanks!", "")
-    assert not _is_greeting("Say that in one sentence.", "")
-    assert not _is_greeting("thanks", "USER: hi\nASSISTANT: Hello!")  # mid-conversation → the model replies
+def test_canned_greeting_for_pure_small_talk_only():
+    from backend.app.agents.response_agent import _greeting_reply
+
+    assert _is_greeting("hi")
+    assert _is_greeting("Thanks!")
+    assert _is_greeting("hello again")
+    assert not _is_greeting("Say that in one sentence.")  # follow-up → the model, with memory
+    assert not _is_greeting("hello, which one was worst?")  # greeting word but a real question
+    # Mid-conversation "hello" must not make the model repeat the last answer.
+    assert _is_greeting("hello")
+    assert _greeting_reply("hello", "USER: q\nASSISTANT: long answer", "Assistant", "Bank") == "Hello again. What else can I help you with?"
+    assert _greeting_reply("thanks", "", "Assistant", "Bank").startswith("You're welcome")

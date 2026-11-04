@@ -2,12 +2,64 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from backend.app.agents.state import AgentState
 from backend.app.models.schemas import AgentEvent, Role
 from backend.app.observability.logging import get_logger
 from backend.app.tools.knowledge_search import knowledge_search
 
 logger = get_logger(__name__)
+
+HINT_BOOST = 0.08  # added to the score of hits that match every guessed metadata hint
+MAX_RESULTS = 6
+
+
+def _metadata_hints(message: str) -> dict[str, str]:
+    msg = message.lower()
+    hints: dict[str, str] = {}
+    if "incident" in msg or "outage" in msg:
+        hints["document_type"] = "incident"
+    if "policy" in msg:
+        hints["document_type"] = "policy"
+    if any(w in msg for w in ("payments", "payment", "upi", "neft", "imps")):
+        hints["department"] = "payments"
+    return hints
+
+
+async def _search_with_soft_hints(query: str, role: Role, hints: dict[str, str]) -> dict:
+    """Run the hinted and the unfiltered search side by side and merge them.
+
+    The hinted search keeps precision when the guess is right; the unfiltered search keeps recall
+    when it is wrong. A hit present in both (or matching the hints) gets a small boost.
+    """
+    if not hints:
+        return await knowledge_search(query, role=role, filters=None)
+
+    hinted, plain = await asyncio.gather(
+        knowledge_search(query, role=role, filters=hints),
+        knowledge_search(query, role=role, filters=None),
+    )
+    if not plain.get("ok"):
+        return hinted if hinted.get("ok") else plain
+    if not hinted.get("ok"):
+        return plain
+
+    merged: dict[str, dict] = {}
+    for r in list(plain.get("results") or []) + list(hinted.get("results") or []):
+        md = r.get("metadata") or {}
+        matches_hints = all(str(md.get(k, "")) == v for k, v in hints.items())
+        score = float(r.get("score") or 0.0) + (HINT_BOOST if matches_hints else 0.0)
+        key = r.get("chunk_id") or r["doc_id"]
+        if key not in merged or score > merged[key]["score"]:
+            merged[key] = {**r, "score": score}
+    results = sorted(merged.values(), key=lambda x: x["score"], reverse=True)[:MAX_RESULTS]
+
+    dropped = {}
+    for src in (plain, hinted):
+        for k, v in (src.get("dropped_chunks") or {}).items():
+            dropped[k] = max(dropped.get(k, 0), int(v or 0))
+    return {"ok": True, "results": results, "dropped_chunks": dropped, "degraded": bool(plain.get("degraded") or hinted.get("degraded"))}
 
 
 async def retrieval_node(state: AgentState) -> dict:
@@ -22,23 +74,17 @@ async def retrieval_node(state: AgentState) -> dict:
         ),
     ]
 
-    # Optional metadata hints from natural language
-    filters = {}
-    msg = state["message"].lower()
-    if "incident" in msg or "outage" in msg:
-        filters["document_type"] = "incident"
-    if "policy" in msg:
-        filters["document_type"] = "policy"
-    if "payments" in msg or "payment" in msg or "upi" in msg or "neft" in msg:
-        filters["department"] = "payments"
-
-    result = await knowledge_search(state["message"], role=role, filters=filters or None)
+    # Metadata hints guessed from the wording. They are a *preference*, not a hard filter: a question
+    # that says "payments" may still be best answered by a risk team document (e.g. meeting notes),
+    # so we search with and without the hint concurrently and merge, boosting hinted matches.
+    hints = _metadata_hints(state["message"])
+    result = await _search_with_soft_hints(state["message"], role, hints)
     events.append(
         AgentEvent(
             event_type="tool_call",
             node="retrieval",
-            message="knowledge_search executed",
-            detail={"ok": result.get("ok"), "hits": len(result.get("results") or []), "filters": filters},
+            message="knowledge_search executed" + (" (hinted + unfiltered, merged)" if hints else ""),
+            detail={"ok": result.get("ok"), "hits": len(result.get("results") or []), "hints": hints},
         )
     )
     dropped = result.get("dropped_chunks") or {}

@@ -33,13 +33,14 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
-    session_id: str
+    session_id: str = Field(..., min_length=1, max_length=64)
     require_hitl: bool = False
 
-    @field_validator("message")
+    @field_validator("message", mode="before")
     @classmethod
-    def strip_message(cls, v: str) -> str:
-        return v.strip()
+    def strip_message(cls, v: object) -> object:
+        # Strip *before* the length check so a whitespace-only message is rejected (422), not run.
+        return v.strip() if isinstance(v, str) else v
 
 
 class Citation(BaseModel):

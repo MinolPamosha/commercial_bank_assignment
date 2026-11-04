@@ -169,6 +169,19 @@ class MemoryStore:
             logger.info("memory_summary_updated", session_id=session_id)
         return mem
 
+    def memory_summary(self, session_id: str, user_id: str) -> dict[str, Any]:
+        """What the memory node is about to hand the agents, in panel-friendly form."""
+        mem = self.get_session(session_id, user_id)
+        lt = self._long_term.get(user_id, {})
+        negative = [f for f in lt.get("feedback", []) if f.get("rating") == "down"]
+        return {
+            "prior_turns": len(mem.turns),
+            "has_summary": bool(mem.summary),
+            "preferences": (lt.get("preferences") or "")[:200],
+            "recurring_topics": list(lt.get("topics") or [])[-5:],
+            "recent_thumbs_down": len(negative[-3:]),
+        }
+
     def context_block(self, session_id: str, user_id: str) -> str:
         mem = self.get_session(session_id, user_id)
         lt = self._long_term.get(user_id, {})

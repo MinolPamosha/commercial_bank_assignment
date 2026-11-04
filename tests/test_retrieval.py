@@ -66,3 +66,20 @@ async def test_knowledge_search_applies_access_level_by_role(ready_retriever):
     assert "INC-2025-0142" in {r["doc_id"] for r in analyst["results"]}  # confidential → analyst sees it
     assert "INC-2025-0142" not in {r["doc_id"] for r in viewer["results"]}  # viewer never does
     assert all(r["metadata"]["access_level"] in {"public", "internal"} for r in viewer["results"])
+
+
+async def test_retrieval_agent_metadata_hints_do_not_exclude_other_departments(ready_retriever):
+    """'payments' in the question used to become a hard department filter, which hid the risk
+    team's meeting notes. Hints are now a soft preference merged with an unfiltered search."""
+    from backend.app.agents.retrieval_agent import _metadata_hints, _search_with_soft_hints
+
+    q = "What did the Q1 payments risk review decide about idempotency?"
+    hints = _metadata_hints(q)
+    assert hints == {"department": "payments"}
+    merged = await _search_with_soft_hints(q, Role.ADMINISTRATOR, hints)
+    assert merged["ok"]
+    ids = [r["doc_id"] for r in merged["results"]]
+    assert "MEET-2025-02-RISK" in ids  # department=risk, would have been filtered out before
+    # Hinted hits are still favoured when scores tie: every payments doc got the boost.
+    boosted = [r for r in merged["results"] if r["metadata"]["department"] == "payments"]
+    assert boosted, ids

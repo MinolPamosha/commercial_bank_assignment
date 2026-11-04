@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -39,7 +40,7 @@ AVATAR_ASSISTANT = ":material/account_balance:"
 DEMO_USERS: dict[str, dict[str, str]] = {
     "Kasun Fernando (Analyst)": {"username": "analyst1", "password": "analyst123", "can": "search the documents, run analysis and use the enterprise data tools"},
     "Nimali Perera (Viewer)": {"username": "viewer1", "password": "viewer123", "can": "chat and search the documents"},
-    "Dilani Jayasinghe (Administrator)": {"username": "admin1", "password": "admin123", "can": "everything, including rebuilding the index"},
+    "Dilani Jayasinghe (Administrator)": {"username": "admin1", "password": "admin123", "can": "do everything the analyst can, plus rebuild the index and review everyone's feedback"},
 }
 
 # Clickable starters shown on an empty conversation. (label, full prompt)
@@ -286,9 +287,24 @@ def delete_all_chats(*, clear_long_term: bool = False) -> bool:
 
 # --- Auth ----------------------------------------------------------------------------
 def sign_in(username: str, password: str) -> bool:
+    if not username.strip() or not password:
+        st.error("Enter a username and password.")
+        return False
     try:
-        r = httpx.post(f"{API_BASE}/auth/login", json={"username": username, "password": password}, timeout=30)
-        r.raise_for_status()
+        r = httpx.post(f"{API_BASE}/auth/login", json={"username": username.strip(), "password": password}, timeout=30)
+    except httpx.HTTPError:
+        st.error("Could not reach the assistant. Check the API base URL under Advanced and try again.")
+        return False
+    if r.status_code == 401:
+        st.error("That username or password is not right.")
+        return False
+    if r.status_code == 429:
+        st.error("Too many sign in attempts. Wait a moment and try again.")
+        return False
+    if r.status_code != 200:
+        st.error(f"Sign in did not work (server said {r.status_code}). Try again in a moment.")
+        return False
+    try:
         data = r.json()
         st.session_state.token = data["access_token"]
         st.session_state.role = data["role"]
@@ -299,8 +315,8 @@ def sign_in(username: str, password: str) -> bool:
         st.query_params["s"] = st.session_state.resume_id
         persist_session()
         return True
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"Sign in did not work: {exc}")
+    except Exception:  # noqa: BLE001
+        st.error("Signed in, but your saved chats could not be loaded. Refresh and try again.")
         return False
 
 
@@ -455,6 +471,15 @@ if not st.session_state.token:
 
 
 # --- Helpers for the conversation screen ---------------------------------------------
+_CITE_RE = re.compile(r"\[doc:\s*([^\]\s]+)\s*\]", re.IGNORECASE)
+
+
+def answer_markdown(text: str) -> str:
+    """Show `[doc:ID]` citation markers as compact inline code chips. Pure markdown, no HTML."""
+    text = _CITE_RE.sub(lambda m: f"`{m.group(1)}`", text or "")
+    return text.replace("[citation-removed]", "_(unverified citation removed)_")
+
+
 def show_sources(citations: list[dict]) -> None:
     """Source chips at a glance, full attribution one click away."""
     st.markdown(ui.source_pills(citations), unsafe_allow_html=True)
@@ -541,9 +566,12 @@ def summarize_turn(result: dict, elapsed: float) -> str:
     """One line kept above the answer afterwards, like ChatGPT's 'Thought for 4s'."""
     if result.get("blocked"):
         return "Blocked by the security guardrails"
-    route = next((e.get("detail", {}).get("route") for e in result.get("events") or [] if e.get("event_type") == "state" and "route" in (e.get("detail") or {})), None)
+    routed = next((e.get("detail", {}) for e in result.get("events") or [] if e.get("event_type") == "state" and "route" in (e.get("detail") or {})), {})
+    route, intent = routed.get("route"), routed.get("intent")
     parts = [f"Answered in {elapsed:.1f}s"]
-    if route:
+    if route == "respond" and intent == "chitchat":
+        parts.append("no search needed")
+    elif route:
         parts.append(ROUTE_WORDS.get(route, route))
     n = len(result.get("citations") or [])
     if n:
@@ -616,7 +644,7 @@ def run_turn(prompt: str) -> None:
                             note_node("response")
                             render_panel(events, live=True, answer_streaming=True)
                         answer += chunk.get("text", "")
-                        answer_box.markdown(answer + "▌")
+                        answer_box.markdown(answer_markdown(answer) + "▌")
                     elif kind == "result":
                         result = chunk
                     elif kind == "error":
@@ -633,7 +661,7 @@ def run_turn(prompt: str) -> None:
         meta = summarize_turn(result, time.monotonic() - started)
         thinking.update(label=meta, state="error" if result.get("blocked") else "complete")
         final_answer = result.get("answer", "")
-        answer_box.markdown(final_answer)
+        answer_box.markdown(answer_markdown(final_answer))
 
     st.session_state.events = result.get("events") or events
     st.session_state.hitl_token = result.get("hitl_token")
@@ -787,9 +815,9 @@ with col_chat:
             if msg.get("superseded"):
                 # Greyed, collapsed by default: the live draft is the revised one below.
                 with st.expander("Earlier draft (sent back)", expanded=False):
-                    st.markdown(msg["content"])
+                    st.markdown(answer_markdown(msg["content"]) if msg["role"] == "assistant" else msg["content"])
             else:
-                st.markdown(msg["content"])
+                st.markdown(answer_markdown(msg["content"]) if msg["role"] == "assistant" else msg["content"])
             if msg.get("citations") and not msg.get("superseded"):
                 show_sources(msg["citations"])
             if msg.get("degraded") and not msg.get("superseded"):

@@ -21,7 +21,7 @@ from langgraph.types import interrupt
 from backend.app.agents.state import AgentState
 from backend.app.config import get_settings
 from backend.app.models.schemas import AgentEvent
-from backend.app.security.guardrails import check_citations
+from backend.app.security.guardrails import DOC_ID_PATTERN, check_citations
 
 # After this many send-backs the loop stops — the reviewer must rephrase rather than thrash.
 MAX_HITL_REVISIONS = 2
@@ -118,7 +118,17 @@ async def validate_node(state: AgentState) -> dict:
                 )
             )
 
-    cite_check = check_citations(answer, citations + prior)
+    # Ids that a live tool returned this turn (ticket numbers, service ids) are real evidence too.
+    tool_truth: set[str] = set()
+    for tr in state.get("tool_results") or []:
+        res = tr.get("result") or {}
+        if res.get("ok"):
+            _leaf_strings(res.get("data"), tool_truth)
+    tool_ids = {s for s in tool_truth if DOC_ID_PATTERN.fullmatch(s)}
+    for s in tool_truth:
+        tool_ids.update(DOC_ID_PATTERN.findall(s))
+
+    cite_check = check_citations(answer, citations + prior, grounded_ids=tool_ids)
     ok = cite_check.ok
     if not ok:
         notes.extend(cite_check.reasons)
@@ -174,6 +184,8 @@ async def validate_node(state: AgentState) -> dict:
 
     settings = get_settings()
     needs_human = bool(state.get("hitl_required")) or (settings.hitl_enabled and state.get("intent") == "research")
+    if state.get("intent") == "chitchat" and not state.get("revision_feedback"):
+        needs_human = False  # nothing to review in "hello" / "thanks", even with "always ask" on
     route = "hitl" if needs_human else "end"
 
     return {

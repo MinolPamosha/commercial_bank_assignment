@@ -304,11 +304,21 @@ async def _stream_turn(
     _traced_memory_update(session_id, user_id, "user", guard.sanitized_text)
     memory_context = _traced_memory_load(session_id, user_id)
     prior_citations = memory_store.session_citations(session_id, user_id)
+    mem_summary = memory_store.memory_summary(session_id, user_id)
+    applied = []
+    if mem_summary["prior_turns"] > 1:
+        applied.append(f"{mem_summary['prior_turns'] - 1} earlier turn(s)")
+    if mem_summary["preferences"]:
+        applied.append("saved preferences")
+    if mem_summary["recent_thumbs_down"]:
+        applied.append(f"{mem_summary['recent_thumbs_down']} recent thumbs-down note(s)")
+    if mem_summary["recurring_topics"]:
+        applied.append("recurring topics")
     mem_event = AgentEvent(
         event_type="memory",
         node="memory",
-        message="Loaded session + long-term memory context",
-        detail={"chars": len(memory_context), "known_docs": [c.get("doc_id") for c in prior_citations]},
+        message="Loaded session + long-term memory context" + (f" ({', '.join(applied)})" if applied else " (first turn, nothing saved yet)"),
+        detail={"chars": len(memory_context), "known_docs": [c.get("doc_id") for c in prior_citations], **mem_summary},
     )
     events.append(mem_event)
     yield {"type": "event", "event": mem_event}

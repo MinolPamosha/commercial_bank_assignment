@@ -50,9 +50,14 @@ Decide how to handle the request. Reply with ONLY a JSON object:
 Routing rules:
 - "retrieve": a factual question answerable from internal documents (one topic, one or few docs).
 - "research": broad synthesis across MANY documents — "summarize all…", recurring themes, trends,
-  comparisons across incidents/policies. Expensive; only when genuinely multi-document.
+  comparisons across incidents/policies, and any counting/averaging/statistics computed FROM the
+  documents (e.g. "how many incidents were SEV-1", "average outage duration from the reports").
+  The research path reads the documents in batches and runs python_analysis over the evidence.
+  Expensive; only when genuinely multi-document.
 - "tools": the user needs LIVE enterprise data (people, on-call, teams, service catalog/owners/SLOs,
-  current/open incident tickets) or a calculation. Set "tool" and "tool_params".
+  current/open incident TICKETS from the ticketing system) or a standalone arithmetic calculation
+  that needs no documents. Set "tool" and "tool_params". Do not use mcp_incident_records to answer
+  questions about written incident reports / post-mortems; those live in the documents.
 - "respond": greetings/small talk, OR a follow-up that can be answered from the conversation
   memory below without new evidence (e.g. "which one was most common?", "say that shorter").
   Intent "chitchat" is only for greetings/thanks; a follow-up about earlier answers is "qa".

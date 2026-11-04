@@ -166,7 +166,20 @@ def describe_event(ev: dict[str, Any]) -> Described:
     if et == "memory":
         chars = d.get("chars", 0)
         note = "nothing stored yet, this is a fresh chat" if not chars else f"{chars} characters of context loaded"
-        return Described(icon, "Memory loaded", [f"Recalled this chat's history and what is known about you ({note})."])
+        lines = [f"Recalled this chat's history and what is known about you ({note})."]
+        prior = int(d.get("prior_turns") or 0) - 1
+        if prior > 0:
+            lines.append(f"**Earlier turns in this chat:** {prior}.")
+        if d.get("preferences"):
+            lines.append(f"**Saved preferences (from your feedback):** {d['preferences']}")
+        if d.get("recent_thumbs_down"):
+            lines.append(f"**Recent thumbs down:** {d['recent_thumbs_down']}, so the answer will try to address those notes.")
+        if d.get("recurring_topics"):
+            lines.append("**Recurring topics:** " + ", ".join(str(t).replace("_", " ") for t in d["recurring_topics"]) + ".")
+        known = d.get("known_docs") or []
+        if known:
+            lines.append(f"**Documents already shown in this chat:** {', '.join(known[:6])}.")
+        return Described(icon, "Memory loaded", lines)
 
     if et == "guardrail":
         if node == "input_validation":
@@ -360,7 +373,9 @@ def summarize(events: Iterable[dict[str, Any]]) -> TurnSummary:
         elif et == "rlm" and msg.startswith("Analyzed batch") and d.get("doc_id"):
             s.docs.add(d["doc_id"])
         elif et == "tool_call":
-            s.tool_calls += 1
+            # The tools node emits two events per call ("Invoking X" then "X returned data"); count the call once.
+            if not msg.endswith("returned data"):
+                s.tool_calls += 1
         elif et == "guardrail":
             if node == "input_validation":
                 s.blocked = True
@@ -438,7 +453,7 @@ def _status_box(summary: TurnSummary, live: bool, answer_streaming: bool) -> Non
     elif summary.hitl_waiting:
         now = "Paused. Waiting for you to approve or send it back."
     else:
-        now = "🏁 Finished."
+        now = "Finished."
 
     facts = []
     if summary.route:
@@ -547,8 +562,19 @@ def _step_summary(node: str, group: list[dict[str, Any]]) -> str:
     details = [ev.get("detail") or {} for ev in group]
 
     if node == "memory":
-        chars = next((d.get("chars") for d in details if "chars" in d), 0)
-        return "fresh chat" if not chars else f"recalled {chars} characters of context"
+        d = next((d for d in details if "chars" in d), {})
+        chars = d.get("chars", 0)
+        if not chars:
+            return "fresh chat"
+        bits = []
+        prior = int(d.get("prior_turns") or 0) - 1
+        if prior > 0:
+            bits.append(f"{prior} earlier turn{'s' if prior != 1 else ''}")
+        if d.get("preferences"):
+            bits.append("your saved preferences")
+        if d.get("recent_thumbs_down"):
+            bits.append("recent feedback")
+        return "recalled " + (", ".join(bits) if bits else f"{chars} characters of context")
     if node == "input_validation":
         return "request blocked"
     if node == "supervisor":

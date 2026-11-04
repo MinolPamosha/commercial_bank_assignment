@@ -12,12 +12,29 @@ from backend.app.models.schemas import AgentEvent
 GREETING_WORDS = {"hi", "hello", "hey", "thanks", "thank", "bye", "goodbye", "morning", "afternoon", "evening"}
 
 
-def _is_greeting(message: str, memory_context: str) -> bool:
-    """True for a short opener/closer; never for a follow-up once an assistant turn exists."""
+def _is_greeting(message: str, memory_context: str = "") -> bool:
+    """True for a short greeting/thanks/goodbye made only of small-talk words.
+
+    A short *follow-up* ("say that shorter", "which one?") contains no greeting word, so it still
+    goes to the model with the memory block. A bare "hello" mid-conversation must not: the model
+    would otherwise repeat the previous answer back.
+    """
     words = [w.strip("!.,?") for w in message.lower().split()]
-    if "ASSISTANT:" in memory_context:
+    if not words or len(words) > 4:
         return False
-    return len(words) <= 4 and any(w in GREETING_WORDS for w in words)
+    filler = {"there", "again", "you", "so", "much", "a", "lot", "good", "ok", "okay", "and", "bye"}
+    return any(w in GREETING_WORDS for w in words) and all(w in GREETING_WORDS or w in filler for w in words)
+
+
+def _greeting_reply(message: str, memory_context: str, assistant_name: str, bank_name: str) -> str:
+    words = {w.strip("!.,?") for w in message.lower().split()}
+    if words & {"thanks", "thank"}:
+        return "You're welcome. Ask whenever you need something else."
+    if words & {"bye", "goodbye"}:
+        return "Goodbye. Come back any time you need a policy, incident or runbook."
+    if "ASSISTANT:" in memory_context:
+        return "Hello again. What else can I help you with?"
+    return f"Hello! I'm the {assistant_name} for {bank_name}. Ask me about policies, incidents, runbooks, or architecture."
 
 
 async def response_node(state: AgentState) -> dict:
@@ -36,14 +53,11 @@ async def response_node(state: AgentState) -> dict:
         ],
     }
 
-    # Canned greeting only for a real opener ("hi", "hello", "thanks"). A short follow-up in an
-    # ongoing conversation ("say that shorter") must go to the model with the memory block, even
-    # if the supervisor labelled it small talk.
-    if state.get("intent") == "chitchat" and _is_greeting(state["message"], state.get("memory_context") or ""):
-        answer = (
-            f"Hello! I'm the {settings.assistant_name} for {settings.bank_name}. "
-            "Ask me about policies, incidents, runbooks, or architecture."
-        )
+    # Canned reply for pure small talk ("hi", "hello again", "thanks"), whatever the supervisor
+    # labelled it. A short follow-up in an ongoing conversation ("say that shorter") has no
+    # greeting word and goes to the model with the memory block.
+    if _is_greeting(state["message"]):
+        answer = _greeting_reply(state["message"], state.get("memory_context") or "", settings.assistant_name, settings.bank_name)
     else:
         revision = (state.get("revision_feedback") or "").strip()
         if revision:
