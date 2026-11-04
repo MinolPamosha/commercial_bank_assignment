@@ -56,15 +56,15 @@ NODE_ICONS: dict[str, str] = {
 }
 
 NODE_PURPOSE: dict[str, str] = {
-    "memory": "recalls earlier turns of this chat and what it already knows about you",
-    "input_validation": "checks the request for prompt injection and attempts to pull out secrets",
-    "supervisor": "reads the question, works out what kind of task it is and picks the right specialist",
-    "retrieval": "searches the document library with dense embeddings and BM25 keywords, fuses them (RRF) and reranks",
-    "research": "breaks a broad question into a search plan, studies documents in batches and pulls the themes together",
-    "tools": "calls enterprise tools (the MCP server, Python analysis), but only the ones your role allows",
-    "response": "writes the answer from the evidence collected, citing documents as [doc:…]",
-    "validate": "checks for made up citations and partial results before you see the answer",
-    "hitl": "pauses so a person can approve or reject the answer",
+    "memory": "brings in earlier turns from this chat and anything already known about you",
+    "input_validation": "checks the request for prompt injection or attempts to pull out secrets",
+    "supervisor": "reads the question, decides what kind of task it is, and picks who should handle it",
+    "retrieval": "searches documents by meaning and by keywords, then merges and reranks the hits",
+    "research": "breaks a broad question into a search plan, studies documents in batches, and pulls themes together",
+    "tools": "calls live bank tools (directory, catalogue, incidents, analysis), only if your role allows them",
+    "response": "writes the answer from the evidence, citing documents as [doc:…]",
+    "validate": "checks for made up citations before you see the answer",
+    "hitl": "pauses so you can approve the answer or send it back",
 }
 
 EVENT_ICONS: dict[str, str] = {
@@ -308,7 +308,7 @@ def describe_event(ev: dict[str, Any]) -> Described:
 
     if et == "hitl":
         preview = (d.get("draft_preview") or "").strip()
-        lines = ["Use **Approve** or **Send back** in the chat to release or discard the draft."]
+        lines = ["Use **Approve** or **Send back** in the chat."]
         if preview:
             one_line = " ".join(preview.split())[:200]
             lines.append(f"> Draft preview: {one_line}{'…' if len(preview) > 200 else ''}")
@@ -436,7 +436,7 @@ def _status_box(summary: TurnSummary, live: bool, answer_streaming: bool) -> Non
         else:
             now = "Starting."
     elif summary.hitl_waiting:
-        now = "🙋 Paused, waiting for your approval."
+        now = "Paused. Waiting for you to approve or send it back."
     else:
         now = "🏁 Finished."
 

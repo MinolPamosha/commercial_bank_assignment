@@ -58,17 +58,17 @@ DEGRADED_REASONS: dict[str, str] = {
 
 # What the inline status says while each LangGraph node runs (the panel has the detail).
 THINKING_LABELS: dict[str, str] = {
-    "memory": "Recalling this conversation…",
+    "memory": "Looking back at this chat…",
     "input_validation": "Checking the request…",
-    "supervisor": "Working out what you need…",
-    "retrieval": "Searching the document library…",
-    "research": "Reading documents in batches…",
-    "tools": "Calling enterprise data…",
-    "response": "Writing the answer…",
-    "validate": "Checking the citations…",
-    "hitl": "Waiting for your approval",
+    "supervisor": "Figuring out what you need…",
+    "retrieval": "Searching the documents…",
+    "research": "Going through the documents…",
+    "tools": "Checking live bank data…",
+    "response": "Putting the answer together…",
+    "validate": "Double checking the sources…",
+    "hitl": "Waiting for you",
 }
-ROUTE_WORDS: dict[str, str] = {"retrieve": "document search", "research": "deep research", "tools": "enterprise data", "respond": "conversation memory"}
+ROUTE_WORDS: dict[str, str] = {"retrieve": "document search", "research": "deep research", "tools": "live bank data", "respond": "from earlier in this chat"}
 
 # --- Session state -----------------------------------------------------------------
 _DEFAULTS = {
@@ -339,7 +339,7 @@ with st.sidebar:
                 st.session_state.confirm_clear_all = True
             if st.session_state.get("confirm_clear_all"):
                 st.warning("Delete every chat and its working memory for you?")
-                forget = st.checkbox("Also forget long-term preferences & feedback", key="clear-lt-too")
+                forget = st.checkbox("Also forget saved preferences and feedback", key="clear-lt-too")
                 y, n = st.columns(2)
                 if y.button("Yes, delete all", key="clear-all-yes", type="primary", use_container_width=True):
                     if delete_all_chats(clear_long_term=bool(forget)):
@@ -379,7 +379,7 @@ with st.sidebar:
             "Show how answers are produced",
             value=True,
             key="show_panel",
-            help="The Agent Activity Panel beside the chat. Turn it off for a focused, full-width chat.",
+            help="Shows the steps beside the chat. Turn it off if you want a quieter, wider chat.",
         )
 
         health = fetch_health(API_BASE)
@@ -407,14 +407,13 @@ with st.sidebar:
         require_hitl = st.checkbox(
             "Always ask me before releasing an answer",
             value=False,
-            help="Every answer pauses as a draft until you approve it. "
-            "Research questions pause anyway, even with this off.",
+            help="Every answer waits for your OK. Research answers already do this even when this is off.",
         )
         expand_all = st.checkbox("Open every step in the activity panel", value=False)
         developer_view = st.checkbox(
             "Developer view (raw JSON events)",
             value=False,
-            help="Show every event with its raw data instead of the readable rows.",
+            help="Show the raw event data as well as the readable steps.",
         )
         st.caption(f"Session `{st.session_state.session_id[:8]}…`")
         with st.form("custom_login", clear_on_submit=False):
@@ -438,7 +437,7 @@ if not st.session_state.token:
         st.write("")
         ui.kicker("Apex Commercial Bank")
         st.title("Knowledge Assistant")
-        st.write("Ask about policies, incidents, runbooks and architecture. Every answer comes with its sources, and you can watch how it was put together.")
+        st.write("Ask about policies, incidents, runbooks and architecture. Answers come with sources, and you can watch the steps as they run.")
         st.write("")
         with st.container(border=True):
             choice = st.selectbox("Who are you today?", list(DEMO_USERS), index=0)
@@ -446,9 +445,9 @@ if not st.session_state.token:
             if st.button("Sign in", type="primary", use_container_width=True):
                 if sign_in(DEMO_USERS[choice]["username"], DEMO_USERS[choice]["password"]):
                     st.rerun()
-        st.caption("Demo identities. What each person can see and do is enforced on the server by role.")
+        st.caption("Demo accounts. What each person can see is enforced on the server by role.")
         if st.session_state.pop("resume_notice", None):
-            st.info("Your sign-in expired. Please sign in again.")
+            st.info("Your sign in expired. Please sign in again.")
         if fetch_health(API_BASE) is None:
             st.warning(f"The API at `{API_BASE}` is not answering. Start the backend, then sign in.")
     st.stop()
@@ -549,7 +548,7 @@ def summarize_turn(result: dict, elapsed: float) -> str:
     if n:
         parts.append(f"{n} source{'s' if n != 1 else ''}")
     if result.get("hitl_required"):
-        parts.append("draft, waiting for approval")
+        parts.append("waiting for you")
     return " · ".join(parts)
 
 
@@ -679,29 +678,29 @@ def decide_hitl(approved: bool, note: str) -> None:
     if approved:
         st.session_state.hitl_token = None
         st.session_state.hitl_decision = "approved"
-        verdict = "✅ **You approved this answer.**"
+        verdict = "**Approved.** This answer is released."
         if note:
             verdict += f" Note: _{note}_"
         st.session_state.messages.append({"role": "assistant", "content": verdict, "citations": None})
         return
 
     # Send back: the backend revises from the note and (usually) pauses again for approval.
-    feedback = (note or "").strip() or "make it clearer and more actionable"
+    feedback = (note or "").strip() or "make it clearer and more useful"
     st.session_state.messages.append(
         {
             "role": "assistant",
-            "content": f"↩️ **Sent back for revision.** Note: _{feedback}_",
+            "content": f"Sent back. Note: _{feedback}_",
             "citations": None,
         }
     )
     if data.get("hitl_required") and data.get("hitl_token"):
         st.session_state.hitl_token = data["hitl_token"]
-        st.session_state.hitl_decision = None  # still waiting — the revised draft is below
+        st.session_state.hitl_decision = None
         st.session_state.messages.append(
             {
                 "role": "assistant",
                 "content": data.get("answer", ""),
-                "meta": "Revised draft · waiting for approval",
+                "meta": "Revised · waiting for you",
                 "citations": data.get("citations"),
                 "degraded": data.get("degraded"),
                 "degradation_reason": data.get("degradation_reason"),
@@ -709,7 +708,6 @@ def decide_hitl(approved: bool, note: str) -> None:
             }
         )
     else:
-        # Revision limit reached — no further approval loop.
         st.session_state.hitl_token = None
         st.session_state.hitl_decision = "sent back"
         st.session_state.messages.append(
@@ -766,23 +764,23 @@ with col_chat:
                 reason = msg.get("degradation_reason") or ""
                 friendly = DEGRADED_REASONS.get(reason)
                 st.warning(
-                    f"Partial answer: {friendly} (`{reason}`)." if friendly else f"Partial answer, degraded mode: {reason}"
+                    f"Partial answer: {friendly}." if friendly else f"Partial answer ({reason})."
                 )
             if msg["role"] == "assistant" and idx == last_assistant_idx and not msg.get("hitl_required"):
                 answer_actions(idx)
 
     if st.session_state.hitl_token and not prompt:
-        with st.container(border=True):
-            ui.kicker("Human in the loop")
+        with st.container(border=True, key="hitl-card"):
+            ui.kicker("Needs your OK")
             st.markdown(
-                "**This answer is waiting for your approval.** Happy with it? Approve it. "
-                "If not, send it back with a note — the assistant revises from that note and shows you the new draft."
+                "**Please review this answer before it goes out.** "
+                "Approve it as is, or send it back with a short note and I'll rewrite it."
             )
             st.text_input(
                 "Note (optional)",
                 key="hitl_note",
                 label_visibility="collapsed",
-                placeholder="What should change? e.g. lead with the recurring root causes, drop the policy digression",
+                placeholder="What should change? e.g. lead with the root causes",
             )
             a1, a2 = st.columns(2)
             if a1.button("Approve", type="primary", use_container_width=True, icon=":material/check:"):
@@ -791,6 +789,8 @@ with col_chat:
             if a2.button("Send back", use_container_width=True, icon=":material/undo:"):
                 decide_hitl(False, st.session_state.get("hitl_note", ""))
                 st.rerun()
+        # Extra space so the card clears the pinned composer even before CSS catches up.
+        st.markdown('<div style="height: 4.5rem"></div>', unsafe_allow_html=True)
 
     if prompt:
         if st.session_state.hitl_token:
@@ -798,7 +798,7 @@ with col_chat:
             # backend thread restarts from the new input and the old interrupt is discarded.
             st.session_state.hitl_token = None
             st.session_state.hitl_decision = "set aside"
-            note = "ℹ️ _The draft above was left unapproved and set aside; moving on to your new question._"
+            note = "_Left the draft above and moved on to your new question._"
             st.session_state.messages.append({"role": "assistant", "content": note, "citations": None})
             with st.chat_message("assistant", avatar=AVATAR_ASSISTANT):
                 st.markdown(note)

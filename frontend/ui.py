@@ -168,10 +168,16 @@ _CSS_SPLIT = """
     overflow-y: auto;
     overscroll-behavior: contain;
     align-self: stretch !important;
-    padding-bottom: 0.5rem;
+    padding-bottom: 0.75rem;
     scrollbar-width: thin;
     scrollbar-color: transparent transparent;
   }
+  /* Chat column only: leave room under the last message / approval card so the pinned
+     composer never covers Approve / Send back. */
+  [data-testid="stHorizontalBlock"]:has(.st-key-activity) > [data-testid="stColumn"]:not(:has(.st-key-activity)) {
+    padding-bottom: 7.5rem;
+  }
+  .st-key-hitl-card { margin-bottom: 1rem; }
   [data-testid="stHorizontalBlock"]:has(.st-key-activity) > [data-testid="stColumn"]:hover,
   [data-testid="stHorizontalBlock"]:has(.st-key-activity) > [data-testid="stColumn"]:focus-within {
     scrollbar-color: #C5CED6 transparent;
@@ -211,10 +217,11 @@ _SCROLL_HELPER = """
     return { chat, panel };
   }
 
-  function stickBottom(el) {
+  function stickBottom(el, force) {
     if (!el) return;
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (gap < 140 || el.dataset.apxForce === "1") {
+    const needHitl = !!doc.querySelector(".st-key-hitl-card");
+    if (force || needHitl || gap < 160 || el.dataset.apxForce === "1") {
       el.scrollTop = el.scrollHeight;
       el.dataset.apxForce = "0";
     }
@@ -222,14 +229,16 @@ _SCROLL_HELPER = """
 
   const obs = new MutationObserver(function () {
     const { chat, panel } = panes();
-    stickBottom(chat);
-    stickBottom(panel);
+    stickBottom(chat, false);
+    stickBottom(panel, false);
   });
   obs.observe(doc.body, { childList: true, subtree: true, characterData: true });
-  setTimeout(function () {
+  function forceChatBottom() {
     const { chat } = panes();
-    if (chat) { chat.dataset.apxForce = "1"; stickBottom(chat); }
-  }, 250);
+    stickBottom(chat, true);
+  }
+  setTimeout(forceChatBottom, 250);
+  setTimeout(forceChatBottom, 900);
 })();
 </script>
 """
@@ -237,8 +246,9 @@ _SCROLL_HELPER = """
 # Focus layout (panel hidden): one reading-width column centred on the page, composer aligned to it.
 _CSS_FOCUS = """
 <style>
-.st-key-chat-focus { max-width: 50rem; margin: 0 auto; }
+.st-key-chat-focus { max-width: 50rem; margin: 0 auto; padding-bottom: 6rem; }
 [data-testid="stBottomBlockContainer"] > [data-testid="stVerticalBlockBorderWrapper"] { max-width: 50rem; margin: 0 auto; }
+.st-key-hitl-card { margin-bottom: 1rem; }
 </style>
 """
 
@@ -255,8 +265,8 @@ def inject_css(*, focus: bool = False) -> None:
 def welcome(first_name: str) -> str:
     return (
         '<div class="apx-welcome">'
-        f"<h1>What can I help with, {html.escape(first_name)}?</h1>"
-        "<p>Ask about policies, incidents, runbooks or architecture. Pick one of these or type your own question below.</p>"
+        f"<h1>Hi {html.escape(first_name)}, what do you need?</h1>"
+        "<p>Policies, incidents, runbooks, architecture. Pick a starter below or type your own question.</p>"
         "</div>"
     )
 
