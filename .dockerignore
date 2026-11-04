@@ -1,0 +1,31 @@
+# Never bake secrets or local state into the image
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+.streamlit/credentials.toml
+
+# Local environments / caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Rebuilt at container start (mounted as a volume in compose)
+data/index/
+
+# Repo metadata, editor and docs not needed at runtime
+.git/
+.gitignore
+.idea/
+.vscode/
+docs/
+*.pdf
+*.docx
+*.log
+.DS_Store

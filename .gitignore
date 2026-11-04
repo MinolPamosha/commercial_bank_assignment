@@ -1,0 +1,65 @@
+# =============================================================================
+# Apex Commercial Bank — AI Knowledge Assistant
+# Only source, tests, sample corpus, deployment files and deliverable docs are
+# tracked. Everything below is secrets, local state, generated artifacts or
+# tooling that is not part of the assessed solution.
+# =============================================================================
+
+# --- Secrets & local credentials (never commit) -----------------------------
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+.streamlit/credentials.toml
+*.pem
+*.key
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+ENV/
+
+# --- Test / tooling caches --------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# --- Generated retrieval index & runtime memory state -----------------------
+# Rebuilt on startup / by `python scripts/ingest.py` from data/documents/.
+data/index/
+data/index_test/
+
+# --- Logs -------------------------------------------------------------------
+*.log
+logs/
+
+# --- Doc-generation toolchain (not part of the assessed solution) -----------
+# The Word/PNG deliverables in docs/ are committed; the scripts that render
+# them and the personal video-recording script are local-only.
+scripts/docgen/
+scripts/build_docs.py
+docs/word/06_Demo_Video_Recording_Script.docx
+
+# --- Assignment brief (not a deliverable) -----------------------------------
+*.pdf
+
+# --- Editor / OS ------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+~$*

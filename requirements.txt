@@ -1,0 +1,38 @@
+# Apex Commercial Bank — Enterprise AI Assistant
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+streamlit==1.41.1
+httpx==0.28.1
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-dotenv==1.0.1
+python-multipart==0.0.20
+
+# LangChain / LangGraph / Observability
+langchain==0.3.14
+langchain-core==0.3.29
+langchain-openai==0.3.0
+langchain-community==0.3.14
+langgraph==0.2.62
+langsmith==0.2.10
+openai>=1.58.0
+
+# MCP (server: FastMCP over Streamable HTTP; client: ClientSession) — 1.9.x stays on starlette<0.42 for fastapi 0.115
+mcp==1.9.4
+
+# Retrieval
+pinecone==5.4.2
+rank-bm25==0.2.2
+numpy==1.26.4
+tiktoken==0.8.0
+
+# Auth / security
+PyJWT==2.10.1
+
+# Utils
+aiofiles==24.1.0
+tenacity==9.0.0
+structlog==24.4.0
+orjson==3.10.12
+pyyaml==6.0.2
+scikit-learn==1.6.0
