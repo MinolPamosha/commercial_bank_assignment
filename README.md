@@ -81,6 +81,13 @@ away, 👍/👎 feedback (👎 asks for an optional comment, stored in long-term
 thread), a connection line (retrieval mode, LangSmith on/off) and a **Show how answers are produced**
 toggle. The panel is on by default; turning it off gives a centred, reading-width chat for focused use.
 
+**A browser refresh does not sign you out or lose the conversation.** Streamlit's `session_state`
+belongs to one tab's websocket session and is wiped on reload, so signed-in UI sessions are also
+kept in a process-wide store under an opaque id carried in the URL (`?s=…`). On load that id restores
+identity, the open chat and the recent list, and the backend memory thread continues because the same
+`session_id` is reused. The JWT itself never goes in the URL; the entry is removed on sign out, when
+the token expires (8 h, the user is told to sign in again), or when the Streamlit process restarts.
+
 ## How a turn is decided and executed
 
 - **Supervisor** sees the user message, the conversation memory and the **tool catalog**

@@ -16,6 +16,7 @@ credentials, API URL) sit under "Advanced" so the first impression stays simple.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import time
@@ -97,6 +98,63 @@ def auth_headers() -> dict[str, str]:
 _CHAT_FIELDS = ("messages", "events", "hitl_token", "hitl_decision", "feedback_given")
 
 
+# --- Surviving a browser refresh -----------------------------------------------------------
+# Streamlit's session_state belongs to one browser tab's websocket session and is wiped on reload,
+# which would sign the user out and blank the chat. So signed-in UI sessions are also kept in a
+# process-wide store (cache_resource = one dict for the Streamlit process) under an opaque id that
+# travels in the URL as ?s=<id>. On load, that id restores identity, open chat and recent chats; the
+# backend memory thread continues because the same session_id is reused. The JWT itself never goes
+# in the URL. Entries die with the token (8 h), on sign out, or when the Streamlit process restarts.
+_RESUME_FIELDS = ("token", "role", "display_name", "session_id", "chats", *_CHAT_FIELDS)
+RESUME_TTL_S = 8 * 3600
+
+
+@st.cache_resource(show_spinner=False)
+def _resume_store() -> dict[str, dict]:
+    return {}
+
+
+def _token_expired(token: str | None) -> bool:
+    """Read the JWT's exp claim without verifying it (the server verifies on every request)."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return float(json.loads(base64.urlsafe_b64decode(payload))["exp"]) <= time.time()
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def persist_session() -> None:
+    rid = st.session_state.get("resume_id")
+    if not rid or not st.session_state.token:
+        return
+    store = _resume_store()
+    now = time.time()
+    for stale in [k for k, v in store.items() if now - v.get("saved_at", 0) > RESUME_TTL_S]:
+        store.pop(stale, None)
+    store[rid] = {f: st.session_state.get(f) for f in _RESUME_FIELDS} | {"saved_at": now}
+
+
+def restore_session() -> None:
+    rid = st.query_params.get("s")
+    if not rid:
+        return
+    saved = _resume_store().get(rid)
+    if not saved or _token_expired(saved.get("token")):
+        _resume_store().pop(rid, None)
+        st.query_params.pop("s", None)
+        if saved:
+            st.session_state.resume_notice = True
+        return
+    for f in _RESUME_FIELDS:
+        st.session_state[f] = saved[f]
+    st.session_state.resume_id = rid
+
+
+if not st.session_state.token:
+    restore_session()
+
+
 def chat_title(messages: list[dict]) -> str:
     first = next((m["content"] for m in messages if m["role"] == "user"), "New chat")
     return first if len(first) <= 44 else first[:43].rstrip() + "…"
@@ -144,6 +202,9 @@ def sign_in(username: str, password: str) -> bool:
         st.session_state.display_name = data["display_name"]
         st.session_state.chats = {}  # a new identity starts with its own conversations
         _clear_current()
+        st.session_state.resume_id = uuid.uuid4().hex
+        st.query_params["s"] = st.session_state.resume_id
+        persist_session()
         return True
     except Exception as exc:  # noqa: BLE001
         st.error(f"Sign in did not work: {exc}")
@@ -151,6 +212,8 @@ def sign_in(username: str, password: str) -> bool:
 
 
 def sign_out() -> None:
+    _resume_store().pop(st.session_state.pop("resume_id", None), None)
+    st.query_params.pop("s", None)
     st.session_state.token = None
     st.session_state.pop("role", None)
     st.session_state.pop("display_name", None)
@@ -264,6 +327,8 @@ if not st.session_state.token:
                 if sign_in(DEMO_USERS[choice]["username"], DEMO_USERS[choice]["password"]):
                     st.rerun()
         st.caption("Demo identities. What each person can see and do is enforced on the server by role.")
+        if st.session_state.pop("resume_notice", None):
+            st.info("Your sign-in expired. Please sign in again.")
         if fetch_health(API_BASE) is None:
             st.warning(f"The API at `{API_BASE}` is not answering. Start the backend, then sign in.")
     st.stop()
@@ -403,6 +468,10 @@ def run_turn(prompt: str) -> None:
                 },
                 timeout=httpx.Timeout(240.0, connect=10.0),
             ) as resp:
+                if resp.status_code == 401:  # token expired (8 h): back to sign-in with a note
+                    sign_out()
+                    st.session_state.resume_notice = True
+                    st.rerun()
                 if resp.status_code == 429:
                     resp.read()
                     thinking.update(label="Too many requests", state="error")
@@ -582,3 +651,5 @@ with col_chat:
 
 # Final (non-live) render of the panel for the current turn
 render_panel(st.session_state.events, live=False)
+# Snapshot this tab's state so a browser refresh lands back here (see "Surviving a browser refresh").
+persist_session()
