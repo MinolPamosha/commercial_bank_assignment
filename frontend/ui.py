@@ -124,6 +124,12 @@ section[data-testid="stSidebar"] [class*="st-key-clear-all"] button:hover { colo
 .apx-dot.ok i { background: #1F7A6D; }
 .apx-dot.bad i { background: #C62828; }
 
+/* Revised draft after a send back: clear banner so it never reads as an in place edit */
+.apx-revised { display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin: 0 0 10px;
+               border-left: 3px solid #1F7A6D; background: #F1F8F6; border-radius: 8px;
+               font-size: 0.85rem; color: #1B2733; }
+.apx-revised .apx-badge { background: #1F7A6D; color: #fff; }
+
 /* "Ask again" stays quiet next to the thumbs */
 [class*="st-key-again-"] button { color: #6B7780; font-size: 0.82rem; padding: 0 0.4rem; min-height: 2rem; }
 [class*="st-key-again-"] button:hover { color: #1F7A6D; }

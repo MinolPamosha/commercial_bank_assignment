@@ -686,10 +686,26 @@ def decide_hitl(approved: bool, note: str) -> None:
 
     # Send back: the backend revises from the note and (usually) pauses again for approval.
     feedback = (note or "").strip() or "make it clearer and more useful"
+
+    # Mark the draft that was sent back so it reads as superseded, not as the live answer.
+    prev_idx = next(
+        (i for i in range(len(st.session_state.messages) - 1, -1, -1)
+         if st.session_state.messages[i]["role"] == "assistant" and st.session_state.messages[i].get("hitl_required")),
+        None,
+    )
+    revision_no = 1
+    if prev_idx is not None:
+        prev = st.session_state.messages[prev_idx]
+        revision_no = int(prev.get("revision") or 0) + 1
+        prev["hitl_required"] = False
+        prev["superseded"] = True
+        prev["meta"] = f"Draft {revision_no} · sent back"
+
     st.session_state.messages.append(
         {
             "role": "assistant",
-            "content": f"Sent back. Note: _{feedback}_",
+            "kind": "note",
+            "content": f"You sent it back: _{feedback}_",
             "citations": None,
         }
     )
@@ -700,7 +716,9 @@ def decide_hitl(approved: bool, note: str) -> None:
             {
                 "role": "assistant",
                 "content": data.get("answer", ""),
-                "meta": "Revised · waiting for you",
+                "meta": f"Draft {revision_no + 1} · revised from your note · waiting for you",
+                "revision": revision_no,
+                "revised": True,
                 "citations": data.get("citations"),
                 "degraded": data.get("degraded"),
                 "degradation_reason": data.get("degradation_reason"),
@@ -713,6 +731,7 @@ def decide_hitl(approved: bool, note: str) -> None:
         st.session_state.messages.append(
             {
                 "role": "assistant",
+                "kind": "note",
                 "content": data.get("answer", ""),
                 "citations": data.get("citations"),
                 "degraded": data.get("degraded"),
@@ -755,18 +774,35 @@ with col_chat:
     last_assistant_idx = max((i for i, m in enumerate(st.session_state.messages) if m["role"] == "assistant"), default=None)
     for idx, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"], avatar=AVATAR_ASSISTANT if msg["role"] == "assistant" else AVATAR_USER):
+            if msg.get("revised") and not msg.get("superseded"):
+                st.markdown(
+                    '<div class="apx-revised"><span class="apx-badge">Revised</span> '
+                    "<span>New draft, rewritten from your note. The earlier one is above, greyed out.</span></div>",
+                    unsafe_allow_html=True,
+                )
             if msg.get("meta"):
                 st.caption(msg["meta"])
-            st.markdown(msg["content"])
-            if msg.get("citations"):
+            if msg.get("superseded"):
+                # Greyed, collapsed by default: the live draft is the revised one below.
+                with st.expander("Earlier draft (sent back)", expanded=False):
+                    st.markdown(msg["content"])
+            else:
+                st.markdown(msg["content"])
+            if msg.get("citations") and not msg.get("superseded"):
                 show_sources(msg["citations"])
-            if msg.get("degraded"):
+            if msg.get("degraded") and not msg.get("superseded"):
                 reason = msg.get("degradation_reason") or ""
                 friendly = DEGRADED_REASONS.get(reason)
                 st.warning(
                     f"Partial answer: {friendly}." if friendly else f"Partial answer ({reason})."
                 )
-            if msg["role"] == "assistant" and idx == last_assistant_idx and not msg.get("hitl_required"):
+            if (
+                msg["role"] == "assistant"
+                and idx == last_assistant_idx
+                and not msg.get("hitl_required")
+                and not msg.get("superseded")
+                and msg.get("kind") != "note"
+            ):
                 answer_actions(idx)
 
     if st.session_state.hitl_token and not prompt:
@@ -776,18 +812,23 @@ with col_chat:
                 "**Please review this answer before it goes out.** "
                 "Approve it as is, or send it back with a short note and I'll rewrite it."
             )
+            # Keyed by draft count so the box starts empty for each new draft instead of carrying
+            # the previous send back note into the next decision. (The token is a JWT, so its
+            # prefix is not unique.)
+            draft_no = sum(1 for m in st.session_state.messages if m["role"] == "assistant" and (m.get("hitl_required") or m.get("superseded")))
+            note_key = f"hitl_note_{len(st.session_state.messages)}_{draft_no}"
             st.text_input(
                 "Note (optional)",
-                key="hitl_note",
+                key=note_key,
                 label_visibility="collapsed",
                 placeholder="What should change? e.g. lead with the root causes",
             )
             a1, a2 = st.columns(2)
             if a1.button("Approve", type="primary", use_container_width=True, icon=":material/check:"):
-                decide_hitl(True, st.session_state.get("hitl_note", ""))
+                decide_hitl(True, st.session_state.get(note_key, ""))
                 st.rerun()
             if a2.button("Send back", use_container_width=True, icon=":material/undo:"):
-                decide_hitl(False, st.session_state.get("hitl_note", ""))
+                decide_hitl(False, st.session_state.get(note_key, ""))
                 st.rerun()
         # Extra space so the card clears the pinned composer even before CSS catches up.
         st.markdown('<div style="height: 4.5rem"></div>', unsafe_allow_html=True)
