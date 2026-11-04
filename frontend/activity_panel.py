@@ -301,6 +301,9 @@ def describe_event(ev: dict[str, Any]) -> Described:
             )
         if msg.startswith("Serving degraded"):
             return Described("⚠️", "Partial answer", [f"Reason: {d.get('reason')}. The system carried on with what it had."], tone="warn")
+        if msg.startswith("Follow-up grounded"):
+            ids = ", ".join(f"`{i}`" for i in d.get("doc_ids") or [])
+            return Described("🔗", "Follow-up grounded on earlier evidence", [f"No new search was needed. The answer draws on documents already shown in this conversation: {ids}."], tone="good")
         return Described(icon, msg, [])
 
     if et == "hitl":

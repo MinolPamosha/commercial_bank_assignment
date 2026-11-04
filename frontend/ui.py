@@ -27,6 +27,12 @@ _CSS = """
 section[data-testid="stSidebar"] { border-right: 1px solid #E6EBF0; }
 section[data-testid="stSidebar"] .block-container { padding-top: 1.5rem; }
 
+/* Composer: Streamlit pins a top-level chat_input to the bottom of the page across the full main
+   width. The layout-specific rules below (split / focus) align it with the chat column so it reads
+   as part of the conversation, like ChatGPT. */
+[data-testid="stBottomBlockContainer"] { padding-top: 0.6rem; padding-bottom: 1.4rem; }
+[data-testid="stChatInput"] { border-radius: 14px; box-shadow: 0 6px 24px rgba(27, 39, 51, 0.08); }
+
 /* Typography helpers */
 .apx-kicker { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
               color: #6B7780; font-weight: 600; margin-bottom: 2px; }
@@ -74,12 +80,113 @@ section[data-testid="stSidebar"] .block-container { padding-top: 1.5rem; }
             margin-left: 8px; vertical-align: middle; letter-spacing: 0.04em; }
 .apx-live .dot { width: 7px; height: 7px; border-radius: 50%; background: #2F6FD1;
                  animation: apx-pulse 1.2s ease-in-out infinite; }
+
+/* Welcome (empty conversation) */
+.apx-welcome { padding: 2.5rem 0 1rem; }
+.apx-welcome h1 { font-size: 2rem; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 6px; color: #1B2733; }
+.apx-welcome p  { color: #5B6771; font-size: 1rem; margin: 0 0 1.2rem; }
+
+/* Chat messages: user turns as a soft bubble, assistant turns as plain reading text (ChatGPT's
+   convention), plus a quieter "Answered in …" line above each answer. */
+[data-testid="stChatMessage"] { padding: 0.6rem 0.9rem; }
+[data-testid="stChatMessage"] [data-testid="stCaptionContainer"] p { font-size: 0.78rem; }
+[data-testid="stChatMessage"] [data-testid="stStatusWidget"],
+[data-testid="stChatMessage"] [data-testid="stExpander"] details { border-radius: 10px; }
+[data-testid="stChatMessage"] [data-testid="stExpander"] summary { padding: 0.45rem 0.8rem; }
+
+/* Source chips under an answer */
+.apx-sources { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 6px; }
+.apx-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px;
+            border: 1px solid #DCE5EA; background: #F7FAFB; color: #2B3A46; font-size: 0.76rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; max-width: 100%; }
+.apx-pill .id { white-space: nowrap; }
+.apx-pill .t { font-family: inherit; color: #6B7780; font-weight: 400; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; max-width: 16rem; }
+
+/* Sidebar: recent chats read as a list, not a stack of buttons */
+section[data-testid="stSidebar"] [class*="st-key-chat-"] button { justify-content: flex-start; text-align: left;
+    padding: 0.25rem 0.6rem; min-height: 2.1rem; font-weight: 400; }
+section[data-testid="stSidebar"] [class*="st-key-chat-"] button p { font-size: 0.88rem; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+section[data-testid="stSidebar"] [class*="st-key-chat-"] button:disabled { opacity: 1; color: #1B2733;
+    background: #E8F4F1; border-color: transparent; }
+.apx-dot { display: inline-flex; align-items: center; gap: 7px; font-size: 0.8rem; color: #5B6771; }
+.apx-dot i { width: 8px; height: 8px; border-radius: 50%; background: #B8C2CC; display: inline-block; }
+.apx-dot.ok i { background: #1F7A6D; }
+.apx-dot.bad i { background: #C62828; }
+
+/* "Ask again" stays quiet next to the thumbs */
+[class*="st-key-again-"] button { color: #6B7780; font-size: 0.82rem; padding: 0 0.4rem; min-height: 2rem; }
+[class*="st-key-again-"] button:hover { color: #1F7A6D; }
+</style>
+"""
+
+# Split layout: chat column + activity panel. Streamlit sizes the chat column as 1.25 of 2.25
+# (≈ 55.56%) minus the "large" 2rem gap; the composer block is given the same width so it sits
+# under the conversation, not under the panel. Below Streamlit's 640px breakpoint the columns
+# stack and the composer goes full width.
+_CSS_SPLIT = """
+<style>
+@media (min-width: 641px) {
+  /* Narrow the block, not the widget: Streamlit measures the block and sets the input's inner
+     width in pixels from it, so a width on stChatInput alone leaves the textarea full width. */
+  [data-testid="stBottomBlockContainer"] > [data-testid="stVerticalBlockBorderWrapper"] { width: calc(55.5556% - 2rem); }
+
+  /* Activity panel column stays in view while the chat scrolls. It is found via the keyed
+     container inside it, so nested columns (feedback, approval buttons) are not affected. The
+     height leaves room for the pinned composer plus page padding, so the panel is never pushed
+     up (and its header cut off) when the chat is scrolled to the very bottom. */
+  [data-testid="stColumn"]:has(.st-key-activity) {
+    position: sticky; top: 0.5rem; align-self: flex-start;
+    max-height: calc(100vh - 8.5rem); overflow-y: auto; padding-bottom: 1rem;
+  }
+}
+</style>
+"""
+
+# Focus layout (panel hidden): one reading-width column centred on the page, composer aligned to it.
+_CSS_FOCUS = """
+<style>
+.st-key-chat-focus { max-width: 50rem; margin: 0 auto; }
+[data-testid="stBottomBlockContainer"] > [data-testid="stVerticalBlockBorderWrapper"] { max-width: 50rem; margin: 0 auto; }
 </style>
 """
 
 
-def inject_css() -> None:
+def inject_css(*, focus: bool = False) -> None:
+    """Base styles plus the rules for the current layout (split with the panel, or focus without)."""
     st.markdown(_CSS, unsafe_allow_html=True)
+    st.markdown(_CSS_FOCUS if focus else _CSS_SPLIT, unsafe_allow_html=True)
+
+
+def welcome(first_name: str) -> str:
+    return (
+        '<div class="apx-welcome">'
+        f"<h1>What can I help with, {html.escape(first_name)}?</h1>"
+        "<p>Ask about policies, incidents, runbooks or architecture. Pick one of these or type your own question below.</p>"
+        "</div>"
+    )
+
+
+def source_pills(citations: list[dict]) -> str:
+    """One chip per cited document (deduplicated, order kept): id, then title in a quieter tone."""
+    seen: dict[str, str] = {}
+    for c in citations:
+        doc_id = str(c.get("doc_id") or "")
+        if doc_id and doc_id not in seen:
+            seen[doc_id] = str(c.get("title") or "")
+    pills = "".join(
+        f'<span class="apx-pill" title="{html.escape(title)}">📄 <span class="id">{html.escape(doc_id)}</span>'
+        + (f'<span class="t">{html.escape(title)}</span>' if title else "")
+        + "</span>"
+        for doc_id, title in seen.items()
+    )
+    return f'<div class="apx-sources">{pills}</div>'
+
+
+def status_dot(state: str, text: str) -> str:
+    """Connection line in the sidebar. `state` is ok | bad; the text always carries the meaning."""
+    return f'<span class="apx-dot {state}"><i></i>{html.escape(text)}</span>'
 
 
 def kicker(text: str) -> None:

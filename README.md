@@ -69,6 +69,18 @@ Two layers, same data:
 Nothing is hidden by the readable layer; the raw payload of every event is one click away.
 `POST /api/chat` (blocking, returns the complete event list) is kept for API clients and tests.
 
+### Chat experience
+
+The chat side borrows the interaction patterns people already know from ChatGPT, without hiding the
+panel: a pinned composer under the conversation, an inline "thinking" status that walks through the
+nodes (*Recalling this conversation… → Searching the document library… → Writing the answer…*) and
+settles into one line kept above the answer (*Answered in 6.2s · conversation memory · 1 source*,
+or *… · draft, waiting for approval*), source chips under each answer with full attribution one click
+away, 👍/👎 feedback (👎 asks for an optional comment, stored in long-term memory), **Ask again**,
+**New chat** plus a **Recent** list in the sidebar (reopening a chat continues the same backend memory
+thread), a connection line (retrieval mode, LangSmith on/off) and a **Show how answers are produced**
+toggle. The panel is on by default; turning it off gives a centred, reading-width chat for focused use.
+
 ## How a turn is decided and executed
 
 - **Supervisor** sees the user message, the conversation memory and the **tool catalog**
@@ -76,6 +88,12 @@ Nothing is hidden by the readable layer; the raw payload of every event is one c
   `tool_params`, `plan`, `reason`). Every field is validated against a closed vocabulary; invalid output
   falls back to the heuristic router, and the panel shows `decided_by: llm | heuristic`.
   Follow-ups ("which theme was most common?") route to `respond` and are answered from memory.
+  The session also remembers every document cited so far: a follow-up that points back at one of
+  them passes the citation guardrail and shows it under **Sources** (the panel logs *Follow-up
+  grounded on earlier evidence*); documents never seen in the session are still stripped.
+- **A question asked while a draft awaits approval** moves the conversation on: the thread restarts
+  from the new input, the old interrupt is discarded and the chat says so. Approving that stale draft
+  later returns `410` with a plain-language message.
 - **RBAC is enforced at the tool gate, not by the prompt**: a viewer asking for the on-call list *is*
   routed to `mcp_employee_directory` and *visibly denied* (guardrail event + plain-language answer).
 - **Research (RLM)** asks the LLM for a Python-executable plan derived from the question (search steps with
@@ -132,9 +150,19 @@ behaviour quoted in them is taken from the application code. Architecture diagra
 | Document | Contents |
 | --- | --- |
 | [01 Solution Overview & Requirements Coverage](docs/word/01_Solution_Overview_and_Requirements_Coverage.docx) | Executive summary, requirement-by-requirement coverage matrix with code pointers, evaluation-criteria mapping, bonus items, run guide, API reference, configuration reference, deliverables checklist |
-| [02 Architecture Document](docs/word/02_Architecture_Document.docx) | System context, request lifecycle, LangGraph topology and state contract, RLM research path, hybrid retrieval, memory design, tools, observability, failure handling, deployment, production evolution (7 diagrams) |
+| [02 Architecture Document](docs/word/02_Architecture_Document.docx) | System context, request lifecycle, LangGraph topology and state contract, RLM research path, hybrid retrieval, memory design, tools, observability, failure handling, deployment, production evolution (8 diagrams) |
 | [03 Security, RBAC & Guardrails](docs/word/03_Security_RBAC_and_Guardrails.docx) | Threat model, prompt-injection approach, input validation, guardrails, authentication, role matrices and enforcement points, token-bucket rate limiting, HITL, graceful degradation, security test scenarios |
 | [04 Assumptions, Trade-offs & Model Selection](docs/word/04_Assumptions_Tradeoffs_and_Model_Selection.docx) | Assumptions with impact, design trade-offs, LLM/embedding/provider rationale, memory and retrieval decisions, prioritisation, risks, roadmap |
+| [05 Demo Script & Evaluator Guide](docs/word/05_Demo_Script_and_Evaluator_Guide.docx) | 45-minute demo timeline, exact prompts per segment, LangSmith trace tour, assumptions talking points, Q&A and recovery plan, publishing checklist |
+| [06 Demo Video Recording Script](docs/word/06_Demo_Video_Recording_Script.docx) | Section-by-section recording script (what to do on screen / what to say), setup checklist, per-section "evaluator must see" list |
+
+Diagrams (`docs/diagrams/*.png`): `architecture_overview`, `request_lifecycle`, `langgraph_topology`, `rlm_flow`,
+`hybrid_retrieval`, `memory_design`, `security_layers`, `hitl_flow`, `deployment`.
+
+Regenerate everything with `python scripts/build_docs.py` (diagrams are drawn with Pillow; on Windows with
+Microsoft Word installed the table of contents and page numbers are filled in automatically, otherwise Word
+offers to update them on open).
+
 ## Rubric mapping
 
 | Area | Where to look |
@@ -191,9 +219,9 @@ mcp_server/        MCP server (FastMCP, Streamable HTTP) with dummy enterprise d
 frontend/          Streamlit chat (app.py), real-time activity panel (activity_panel.py), design system (ui.py)
 tests/             Offline pytest suite (pytest.ini, requirements-dev.txt)
 data/documents/    Mock bank knowledge corpus (the hybrid index is rebuilt from it at startup)
-docs/word/         Word deliverables (overview, architecture, security, assumptions & trade-offs)
+docs/word/         Word deliverables (overview, architecture, security, assumptions & trade-offs, demo scripts)
 docs/diagrams/     Architecture diagrams (PNG) embedded in the Word documents
-scripts/           ingest.py (rebuild the hybrid index / Pinecone upsert)
+scripts/           ingest.py (rebuild the hybrid index / Pinecone upsert), build_docs.py + docgen/ (regenerate docs)
 ```
 
 ## Public deliverables checklist

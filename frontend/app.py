@@ -1,19 +1,24 @@
-"""Streamlit chat UI. Function and transparency first, kept calm.
+"""Streamlit chat UI. Function and transparency first, with the interaction patterns people
+already know from ChatGPT so nobody needs instructions.
 
 Three screens:
   1. Signed out: one welcome card. Pick a demo identity and sign in (a real JWT login).
   2. Signed in, empty chat: greeting plus example questions you can click.
-  3. Conversation: chat on the left (streaming answer, sources, approval, feedback) and the
-     Agent Activity Panel on the right, fed live by `/api/chat/stream` (NDJSON).
+  3. Conversation: the chat (inline "thinking" status while the agent works, streaming answer,
+     source chips, approval card, thumbs feedback, ask again) and, beside it, the Agent Activity
+     Panel fed live by `/api/chat/stream` (NDJSON). The panel can be hidden for a focused view;
+     it is on by default because watching the agent work is the point of this assistant.
 
-Power features (Developer view, open all steps, custom credentials, API URL) sit under the
-sidebar's "Advanced" expander so the first impression stays simple.
+Sidebar: new chat, recent chats (switch back and the backend memory thread continues), panel
+toggle, connection status, identity. Power features (Developer view, open all steps, custom
+credentials, API URL) sit under "Advanced" so the first impression stays simple.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 
 import httpx
@@ -23,7 +28,6 @@ import ui
 from activity_panel import render_activity_panel
 
 st.set_page_config(page_title="Apex Knowledge Assistant", page_icon="🏦", layout="wide")
-ui.inject_css()
 
 # Calm, consistent avatars (Material icons) instead of the default emoji faces.
 AVATAR_USER = ":material/person:"
@@ -50,6 +54,20 @@ DEGRADED_REASONS: dict[str, str] = {
     "llm_failure": "the language model failed, so this is a summary of the evidence only",
 }
 
+# What the inline status says while each LangGraph node runs (the panel has the detail).
+THINKING_LABELS: dict[str, str] = {
+    "memory": "Recalling this conversation…",
+    "input_validation": "Checking the request…",
+    "supervisor": "Working out what you need…",
+    "retrieval": "Searching the document library…",
+    "research": "Reading documents in batches…",
+    "tools": "Calling enterprise data…",
+    "response": "Writing the answer…",
+    "validate": "Checking the citations…",
+    "hitl": "Waiting for your approval",
+}
+ROUTE_WORDS: dict[str, str] = {"retrieve": "document search", "research": "deep research", "tools": "enterprise data", "respond": "conversation memory"}
+
 # --- Session state -----------------------------------------------------------------
 _DEFAULTS = {
     "token": None,
@@ -57,9 +75,11 @@ _DEFAULTS = {
     "messages": [],
     "events": [],
     "hitl_token": None,
-    "hitl_decision": None,  # "approved" / "sent back" for the current turn, shown on the Approval chip
+    "hitl_decision": None,  # "approved" / "sent back" / "set aside" for the current turn (Approval chip)
     "feedback_given": {},
+    "feedback_pending": None,  # message index whose 👎 is waiting for an optional comment
     "pending_prompt": None,
+    "chats": {},  # session_id → saved conversation (recent chats in the sidebar)
 }
 for key, value in _DEFAULTS.items():
     st.session_state.setdefault(key, value)
@@ -71,16 +91,49 @@ def auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {st.session_state.token}"}
 
 
-def reset_session() -> None:
+# --- Conversations (recent chats) ------------------------------------------------------
+# The backend keeps memory per session_id in-process, so switching back to an earlier chat and
+# asking a follow-up continues that thread. The UI keeps the transcript per chat here.
+_CHAT_FIELDS = ("messages", "events", "hitl_token", "hitl_decision", "feedback_given")
+
+
+def chat_title(messages: list[dict]) -> str:
+    first = next((m["content"] for m in messages if m["role"] == "user"), "New chat")
+    return first if len(first) <= 44 else first[:43].rstrip() + "…"
+
+
+def save_current_chat() -> None:
+    if st.session_state.messages:
+        st.session_state.chats[st.session_state.session_id] = {f: st.session_state[f] for f in _CHAT_FIELDS}
+
+
+def _clear_current() -> None:
     st.session_state.session_id = str(uuid.uuid4())
     st.session_state.messages = []
     st.session_state.events = []
     st.session_state.hitl_token = None
     st.session_state.hitl_decision = None
     st.session_state.feedback_given = {}
+    st.session_state.feedback_pending = None
     st.session_state.pending_prompt = None
 
 
+def new_chat() -> None:
+    save_current_chat()
+    _clear_current()
+
+
+def open_chat(session_id: str) -> None:
+    save_current_chat()
+    saved = st.session_state.chats[session_id]
+    st.session_state.session_id = session_id
+    for f in _CHAT_FIELDS:
+        st.session_state[f] = saved[f]
+    st.session_state.feedback_pending = None
+    st.session_state.pending_prompt = None
+
+
+# --- Auth ----------------------------------------------------------------------------
 def sign_in(username: str, password: str) -> bool:
     try:
         r = httpx.post(f"{API_BASE}/auth/login", json={"username": username, "password": password}, timeout=30)
@@ -89,7 +142,8 @@ def sign_in(username: str, password: str) -> bool:
         st.session_state.token = data["access_token"]
         st.session_state.role = data["role"]
         st.session_state.display_name = data["display_name"]
-        reset_session()  # a new identity starts a fresh conversation thread
+        st.session_state.chats = {}  # a new identity starts with its own conversations
+        _clear_current()
         return True
     except Exception as exc:  # noqa: BLE001
         st.error(f"Sign in did not work: {exc}")
@@ -100,30 +154,73 @@ def sign_out() -> None:
     st.session_state.token = None
     st.session_state.pop("role", None)
     st.session_state.pop("display_name", None)
-    reset_session()
+    st.session_state.chats = {}
+    _clear_current()
 
 
-# --- Sidebar (kept to the essentials) ------------------------------------------------
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_health(api_base: str) -> dict | None:
+    try:
+        return httpx.get(f"{api_base}/health", timeout=5).json()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# --- Sidebar -------------------------------------------------------------------------
 with st.sidebar:
     ui.kicker("Apex Commercial Bank")
     st.markdown("### Knowledge Assistant")
+
     if st.session_state.token:
+        if st.button("＋  New chat", type="primary", use_container_width=True, disabled=not st.session_state.messages):
+            new_chat()
+            st.rerun()
+
+        save_current_chat()
+        if st.session_state.chats:
+            st.caption("Recent")
+            for sid, saved in reversed(list(st.session_state.chats.items())):
+                current = sid == st.session_state.session_id
+                if st.button(
+                    chat_title(saved["messages"]),
+                    key=f"chat-{sid}",
+                    type="secondary" if current else "tertiary",
+                    use_container_width=True,
+                    disabled=current,
+                ):
+                    open_chat(sid)
+                    st.rerun()
+
+        st.divider()
+        # The widget owns its default (on). Seeding the key in session_state before the widget exists
+        # made Streamlit drop the value on the next rerun, hiding the panel unasked.
+        st.toggle(
+            "Show how answers are produced",
+            value=True,
+            key="show_panel",
+            help="The Agent Activity Panel beside the chat. Turn it off for a focused, full-width chat.",
+        )
+
+        health = fetch_health(API_BASE)
+        if health:
+            st.markdown(
+                ui.status_dot("ok", f"Connected · {health.get('retrieval_mode', '?')} · LangSmith {'on' if health.get('langsmith_enabled') else 'off'}"),
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(ui.status_dot("bad", "API unreachable, check the backend"), unsafe_allow_html=True)
+
+        st.divider()
         st.markdown(
             f"**{st.session_state.get('display_name')}**  \n{ui.badge(str(st.session_state.get('role')))}",
             unsafe_allow_html=True,
         )
-        st.write("")
-        c1, c2 = st.columns(2)
-        if c1.button("New chat", use_container_width=True):
-            reset_session()
-            st.rerun()
-        if c2.button("Sign out", use_container_width=True):
+        if st.button("Sign out", type="tertiary"):
             sign_out()
             st.rerun()
     else:
         st.caption("Sign in on the right to get started.")
 
-    st.divider()
     with st.expander("Advanced", expanded=False):
         API_BASE = st.text_input("API base URL", value=API_BASE)
         require_hitl = st.checkbox(
@@ -147,6 +244,9 @@ with st.sidebar:
                 if sign_in(cu, cp):
                     st.rerun()
 
+show_panel = bool(st.session_state.get("show_panel", True))
+ui.inject_css(focus=not show_panel)
+
 
 # --- Screen 1: signed out → one welcome card -----------------------------------------
 if not st.session_state.token:
@@ -164,11 +264,15 @@ if not st.session_state.token:
                 if sign_in(DEMO_USERS[choice]["username"], DEMO_USERS[choice]["password"]):
                     st.rerun()
         st.caption("Demo identities. What each person can see and do is enforced on the server by role.")
+        if fetch_health(API_BASE) is None:
+            st.warning(f"The API at `{API_BASE}` is not answering. Start the backend, then sign in.")
     st.stop()
 
 
 # --- Helpers for the conversation screen ---------------------------------------------
-def show_citations(citations: list[dict]) -> None:
+def show_sources(citations: list[dict]) -> None:
+    """Source chips at a glance, full attribution one click away."""
+    st.markdown(ui.source_pills(citations), unsafe_allow_html=True)
     with st.expander(f"Sources ({len(citations)})", expanded=False):
         for c in citations:
             st.markdown(
@@ -183,7 +287,7 @@ def show_citations(citations: list[dict]) -> None:
                 st.caption(flat[:300] + ("…" if len(flat) > 300 else ""))
 
 
-def send_feedback(idx: int, rating: str) -> None:
+def send_feedback(idx: int, rating: str, comment: str = "") -> None:
     try:
         httpx.post(
             f"{API_BASE}/feedback",
@@ -192,17 +296,51 @@ def send_feedback(idx: int, rating: str) -> None:
                 "session_id": st.session_state.session_id,
                 "message_id": str(idx),
                 "rating": rating,
-                "comment": "" if rating == "up" else "needs work",
+                "comment": comment or ("" if rating == "up" else "needs work"),
             },
             timeout=15,
         )
         st.session_state.feedback_given[idx] = rating
-        st.toast("Thanks, noted. This feedback is kept for future answers.")
+        st.session_state.feedback_pending = None
+        st.toast("Thanks, noted. This feedback shapes future answers for you.")
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not save your feedback: {exc}")
 
 
+def answer_actions(idx: int) -> None:
+    """Thumbs (👎 asks for an optional comment, as ChatGPT does) plus 'Ask again' under the latest answer."""
+    given = st.session_state.feedback_given.get(idx)
+    if given:
+        st.caption("Feedback recorded: " + ("👍 helpful" if given == "up" else "👎 needs work"))
+        return
+    if st.session_state.feedback_pending == idx:
+        with st.form(key=f"fbform-{idx}", border=False):
+            comment = st.text_input("What should be better?", placeholder="Optional: what was wrong or missing?", label_visibility="collapsed")
+            f1, f2 = st.columns(2)
+            if f1.form_submit_button("Send feedback", type="primary", use_container_width=True):
+                send_feedback(idx, "down", comment)
+                st.rerun()
+            if f2.form_submit_button("Skip", type="tertiary", use_container_width=True):
+                send_feedback(idx, "down")
+                st.rerun()
+        return
+    c1, c2 = st.columns([1, 3])
+    rating = c1.feedback("thumbs", key=f"fb-{idx}")
+    if rating == 1:
+        send_feedback(idx, "up")
+        st.rerun()
+    elif rating == 0:
+        st.session_state.feedback_pending = idx
+        st.rerun()
+    last_question = next((m["content"] for m in reversed(st.session_state.messages[:idx]) if m["role"] == "user"), None)
+    if last_question and c2.button("Ask again", key=f"again-{idx}", type="tertiary", icon=":material/refresh:"):
+        st.session_state.pending_prompt = last_question
+        st.rerun()
+
+
 def render_panel(events: list[dict], *, live: bool, answer_streaming: bool = False) -> None:
+    if activity_box is None:
+        return
     render_activity_panel(
         activity_box,
         events,
@@ -214,6 +352,22 @@ def render_panel(events: list[dict], *, live: bool, answer_streaming: bool = Fal
     )
 
 
+def summarize_turn(result: dict, elapsed: float) -> str:
+    """One line kept above the answer afterwards, like ChatGPT's 'Thought for 4s'."""
+    if result.get("blocked"):
+        return "Blocked by the security guardrails"
+    route = next((e.get("detail", {}).get("route") for e in result.get("events") or [] if e.get("event_type") == "state" and "route" in (e.get("detail") or {})), None)
+    parts = [f"Answered in {elapsed:.1f}s"]
+    if route:
+        parts.append(ROUTE_WORDS.get(route, route))
+    n = len(result.get("citations") or [])
+    if n:
+        parts.append(f"{n} source{'s' if n != 1 else ''}")
+    if result.get("hitl_required"):
+        parts.append("draft, waiting for approval")
+    return " · ".join(parts)
+
+
 def run_turn(prompt: str) -> None:
     """Send one chat turn over the NDJSON stream, updating chat + activity panel as chunks arrive."""
     events: list[dict] = []
@@ -222,11 +376,20 @@ def run_turn(prompt: str) -> None:
     answer = ""
     result: dict | None = None
     answer_streaming = False
+    started = time.monotonic()
+    seen_nodes: list[str] = []
 
     with st.chat_message("assistant", avatar=AVATAR_ASSISTANT):
+        thinking = st.status("Thinking…", expanded=False)
         answer_box = st.empty()
-        answer_box.markdown("_Working on it. You can follow each step on the right._")
         render_panel(events, live=True)
+
+        def note_node(node: str) -> None:
+            """Move the inline status along as nodes start; the panel keeps the full detail."""
+            if node in THINKING_LABELS and node not in seen_nodes:
+                seen_nodes.append(node)
+                thinking.update(label=THINKING_LABELS[node])
+                thinking.caption(THINKING_LABELS[node].rstrip("…"))
 
         try:
             with httpx.stream(
@@ -242,6 +405,7 @@ def run_turn(prompt: str) -> None:
             ) as resp:
                 if resp.status_code == 429:
                     resp.read()
+                    thinking.update(label="Too many requests", state="error")
                     st.error("That was a bit quick. " + resp.json().get("detail", "Please wait a moment and try again."))
                     st.session_state.messages.pop()  # drop the user turn we could not process
                     return
@@ -254,10 +418,13 @@ def run_turn(prompt: str) -> None:
                     kind = chunk.get("type")
                     if kind == "event":
                         events.append(chunk)
+                        if chunk.get("event_type") in ("node", "memory", "guardrail", "hitl"):
+                            note_node(chunk.get("node") or "")
                         render_panel(events, live=True, answer_streaming=answer_streaming)
                     elif kind == "token":
                         if not answer_streaming:
                             answer_streaming = True
+                            note_node("response")
                             render_panel(events, live=True, answer_streaming=True)
                         answer += chunk.get("text", "")
                         answer_box.markdown(answer + "▌")
@@ -266,12 +433,16 @@ def run_turn(prompt: str) -> None:
                     elif kind == "error":
                         st.error(chunk.get("detail", "Something went wrong while answering."))
         except httpx.HTTPError as exc:
+            thinking.update(label="Could not reach the assistant", state="error")
             st.error(f"Could not reach the assistant: {exc}")
 
         if result is None:
+            thinking.update(label="No answer this time", state="error")
             answer_box.markdown("_No answer this time. Please try again._")
             return
 
+        meta = summarize_turn(result, time.monotonic() - started)
+        thinking.update(label=meta, state="error" if result.get("blocked") else "complete")
         final_answer = result.get("answer", "")
         answer_box.markdown(final_answer)
 
@@ -281,6 +452,7 @@ def run_turn(prompt: str) -> None:
         {
             "role": "assistant",
             "content": final_answer,
+            "meta": meta,
             "citations": result.get("citations"),
             "degraded": result.get("degraded"),
             "degradation_reason": result.get("degradation_reason"),
@@ -332,25 +504,30 @@ def decide_hitl(approved: bool, note: str) -> None:
 
 
 # --- Screen 2/3: conversation ---------------------------------------------------------
-col_chat, col_activity = st.columns([1.25, 1], gap="large")
+# The composer must be called at the top level of the script: only then does Streamlit pin it to
+# the bottom of the page (inside a column it renders inline, above the messages). CSS in ui.py
+# aligns it with the chat column. Reading it before the columns lets the greeting step aside the
+# moment a question is on its way.
+prompt = st.chat_input("Ask about a policy or an incident…")
+if not prompt and st.session_state.pending_prompt:
+    prompt = st.session_state.pending_prompt
+    st.session_state.pending_prompt = None
 
-with col_activity:
-    activity_box = st.empty()
+activity_box = None
+if show_panel:
+    col_chat, col_activity = st.columns([1.25, 1], gap="large")
+    with col_activity:
+        # Keyed container so CSS can find this column and keep it in view while the chat scrolls.
+        with st.container(key="activity"):
+            activity_box = st.empty()
+else:
+    col_chat = st.container(key="chat-focus")  # centred, reading-width column (see ui.py)
 
 with col_chat:
     first_name = str(st.session_state.get("display_name", "")).split(" ")[0] or "there"
 
-    # Read the input first (chat_input is pinned to the bottom regardless of call order) so the
-    # greeting can step aside the moment a question is on its way.
-    prompt = st.chat_input("Ask about a policy, an incident, a runbook…")
-    if not prompt and st.session_state.pending_prompt:
-        prompt = st.session_state.pending_prompt
-        st.session_state.pending_prompt = None
-
     if not st.session_state.messages and not prompt:
-        ui.kicker("Knowledge Assistant")
-        st.title(f"Hi {first_name}")
-        st.write("What would you like to know? Pick one of these or type your own question below.")
+        st.markdown(ui.welcome(first_name), unsafe_allow_html=True)
         cols = st.columns(2)
         for i, (label, full_prompt) in enumerate(EXAMPLES):
             if cols[i % 2].button(label, key=f"ex-{i}", use_container_width=True):
@@ -360,9 +537,11 @@ with col_chat:
     last_assistant_idx = max((i for i, m in enumerate(st.session_state.messages) if m["role"] == "assistant"), default=None)
     for idx, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"], avatar=AVATAR_ASSISTANT if msg["role"] == "assistant" else AVATAR_USER):
+            if msg.get("meta"):
+                st.caption(msg["meta"])
             st.markdown(msg["content"])
             if msg.get("citations"):
-                show_citations(msg["citations"])
+                show_sources(msg["citations"])
             if msg.get("degraded"):
                 reason = msg.get("degradation_reason") or ""
                 friendly = DEGRADED_REASONS.get(reason)
@@ -370,31 +549,31 @@ with col_chat:
                     f"Partial answer: {friendly} (`{reason}`)." if friendly else f"Partial answer, degraded mode: {reason}"
                 )
             if msg["role"] == "assistant" and idx == last_assistant_idx and not msg.get("hitl_required"):
-                given = st.session_state.feedback_given.get(idx)
-                if given:
-                    st.caption("Feedback recorded: " + ("👍 helpful" if given == "up" else "👎 needs work"))
-                else:
-                    c1, c2, _ = st.columns([1, 1, 3])
-                    if c1.button("👍 Helpful", key=f"up-{idx}"):
-                        send_feedback(idx, "up")
-                        st.rerun()
-                    if c2.button("👎 Needs work", key=f"down-{idx}"):
-                        send_feedback(idx, "down")
-                        st.rerun()
+                answer_actions(idx)
 
-    if st.session_state.hitl_token:
+    if st.session_state.hitl_token and not prompt:
         with st.container(border=True):
-            st.markdown("🙋 **This answer is waiting for your approval.** Happy with it? Approve it. If not, send it back.")
+            ui.kicker("Human in the loop")
+            st.markdown("**This answer is waiting for your approval.** Happy with it? Approve it. If not, send it back.")
             st.text_input("Note (optional)", key="hitl_note", label_visibility="collapsed", placeholder="Add a note if you like")
             a1, a2 = st.columns(2)
-            if a1.button("Approve", type="primary", use_container_width=True):
+            if a1.button("Approve", type="primary", use_container_width=True, icon=":material/check:"):
                 decide_hitl(True, st.session_state.get("hitl_note", ""))
                 st.rerun()
-            if a2.button("Send back", use_container_width=True):
+            if a2.button("Send back", use_container_width=True, icon=":material/undo:"):
                 decide_hitl(False, st.session_state.get("hitl_note", ""))
                 st.rerun()
 
     if prompt:
+        if st.session_state.hitl_token:
+            # Asking a new question while a draft awaits approval moves the conversation on: the
+            # backend thread restarts from the new input and the old interrupt is discarded.
+            st.session_state.hitl_token = None
+            st.session_state.hitl_decision = "set aside"
+            note = "ℹ️ _The draft above was left unapproved and set aside; moving on to your new question._"
+            st.session_state.messages.append({"role": "assistant", "content": note, "citations": None})
+            with st.chat_message("assistant", avatar=AVATAR_ASSISTANT):
+                st.markdown(note)
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user", avatar=AVATAR_USER):
             st.markdown(prompt)
