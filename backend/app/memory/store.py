@@ -125,6 +125,40 @@ class MemoryStore:
         saved = self._conversations.get(user_id, {}).get(session_id)
         return {"session_id": session_id, **saved} if saved else None
 
+    def clear_session_memory(self, user_id: str, session_id: str) -> None:
+        """Drop the in-process working memory for one chat (turns, summary, cited docs)."""
+        self._sessions.pop((user_id, session_id), None)
+
+    def delete_conversation(self, user_id: str, session_id: str) -> bool:
+        """Remove one chat's transcript and its session memory. Returns False if it was not found."""
+        chats = self._conversations.get(user_id) or {}
+        existed = session_id in chats
+        chats.pop(session_id, None)
+        if not chats and user_id in self._conversations:
+            self._conversations.pop(user_id, None)
+        if existed:
+            self._save_conversations()
+        self.clear_session_memory(user_id, session_id)
+        logger.info("conversation_deleted", user_id=user_id, session_id=session_id, existed=existed)
+        return existed
+
+    def delete_all_conversations(self, user_id: str, *, clear_long_term: bool = False) -> int:
+        """Remove every chat for this user (and optionally their long-term preferences/feedback)."""
+        chats = self._conversations.pop(user_id, {}) or {}
+        count = len(chats)
+        if count:
+            self._save_conversations()
+        for sid in list(chats):
+            self.clear_session_memory(user_id, sid)
+        # Also drop any in-process session that never made it into conversations.json.
+        for key in [k for k in self._sessions if k[0] == user_id]:
+            self._sessions.pop(key, None)
+        if clear_long_term:
+            self._long_term.pop(user_id, None)
+            self._save_long_term()
+        logger.info("conversations_cleared", user_id=user_id, count=count, clear_long_term=clear_long_term)
+        return count
+
     def add_turn(self, session_id: str, user_id: str, role: str, content: str) -> SessionMemory:
         mem = self.get_session(session_id, user_id)
         mem.turns.append(Turn(role=role, content=content))

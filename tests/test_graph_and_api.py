@@ -223,3 +223,31 @@ async def test_admin_feedback_export_is_role_gated(api_client):
     admin = await _login(api_client, "admin1", "admin123")
     body = (await api_client.get("/api/admin/feedback", headers=admin)).json()
     assert "analyst1" in body and "cite the runbook next time" in body["analyst1"]["preferences"]
+
+
+async def test_api_delete_conversation_and_clear_all(api_client):
+    from backend.app.memory.store import memory_store
+
+    headers = await _login(api_client, "viewer1", "viewer123")
+    memory_store.save_conversation(
+        "viewer1",
+        "del-1",
+        "to delete",
+        {"messages": [{"role": "user", "content": "hi"}], "events": [], "hitl_token": None, "hitl_decision": None, "feedback_given": {}},
+    )
+    memory_store.save_conversation(
+        "viewer1",
+        "del-2",
+        "also mine",
+        {"messages": [{"role": "user", "content": "yo"}], "events": [], "hitl_token": None, "hitl_decision": None, "feedback_given": {}},
+    )
+    assert (await api_client.delete("/api/conversations/del-1", headers=headers)).status_code == 200
+    assert (await api_client.get("/api/conversations/del-1", headers=headers)).status_code == 404
+    listed = (await api_client.get("/api/conversations", headers=headers)).json()
+    assert {c["session_id"] for c in listed} >= {"del-2"}
+    # Another user cannot delete this person's remaining chat.
+    other = await _login(api_client, "analyst1", "analyst123")
+    assert (await api_client.delete("/api/conversations/del-2", headers=other)).status_code == 404
+    cleared = (await api_client.delete("/api/conversations", headers=headers)).json()
+    assert cleared["ok"] and cleared["deleted"] >= 1
+    assert (await api_client.get("/api/conversations", headers=headers)).json() == []

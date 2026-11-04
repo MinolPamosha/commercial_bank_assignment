@@ -214,6 +214,42 @@ def test_feedback_loop_writes_durable_preferences_into_context(tmp_path):
     assert store.export_feedback()["analyst1"]["preferences"] == "include the backup on-call"
 
 
+def test_deleting_a_chat_clears_its_transcript_and_session_memory(tmp_path):
+    store = MemoryStore()
+    store._conversations_path = tmp_path / "conversations.json"
+    store._conversations = {}
+    store.save_conversation("u1", "keep", "keep me", _transcript(1))
+    store.save_conversation("u1", "gone", "delete me", _transcript(2))
+    store.get_session("gone", "u1")  # warm the in-process memory
+    assert store.delete_conversation("u1", "gone") is True
+    assert store.get_conversation("u1", "gone") is None
+    assert store.list_conversations("u1")[0]["session_id"] == "keep"
+    assert ("u1", "gone") not in store._sessions
+    assert store.delete_conversation("u1", "missing") is False  # already gone
+
+
+def test_delete_all_chats_optionally_forgets_long_term_memory(tmp_path):
+    store = MemoryStore()
+    store._conversations_path = tmp_path / "conversations.json"
+    store._long_term_path = tmp_path / "long_term_memory.json"
+    store._conversations = {}
+    store._long_term = {}
+    store.save_conversation("u1", "a", "one", _transcript(1))
+    store.save_conversation("u1", "b", "two", _transcript(1))
+    store.save_conversation("u2", "theirs", "private", _transcript(1))
+    store.record_feedback("u1", {"rating": "down", "comment": "be more concise please"})
+
+    assert store.delete_all_conversations("u1") == 2
+    assert store.list_conversations("u1") == []
+    assert store.get_conversation("u2", "theirs") is not None  # other users untouched
+    assert "be more concise please" in store.context_block("x", "u1")  # long-term kept by default
+
+    store.save_conversation("u1", "c", "again", _transcript(1))
+    assert store.delete_all_conversations("u1", clear_long_term=True) == 1
+    assert "be more concise please" not in store.context_block("x", "u1")
+    assert "u1" not in store._long_term
+
+
 def test_canned_greeting_only_for_a_real_opener():
     assert _is_greeting("hi", "")
     assert _is_greeting("Thanks!", "")

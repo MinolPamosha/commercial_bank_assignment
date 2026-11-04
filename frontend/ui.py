@@ -111,6 +111,14 @@ section[data-testid="stSidebar"] [class*="st-key-chat-"] button p { font-size: 0
     text-overflow: ellipsis; white-space: nowrap; }
 section[data-testid="stSidebar"] [class*="st-key-chat-"] button:disabled { opacity: 1; color: #1B2733;
     background: #E8F4F1; border-color: transparent; }
+section[data-testid="stSidebar"] [class*="st-key-del-"] button {
+    min-height: 2.1rem; padding: 0; color: #9AA5AF; justify-content: center;
+}
+section[data-testid="stSidebar"] [class*="st-key-del-"] button:hover { color: #C62828; }
+section[data-testid="stSidebar"] [class*="st-key-clear-all"] button {
+    font-size: 0.72rem; min-height: 1.6rem; padding: 0; color: #9AA5AF;
+}
+section[data-testid="stSidebar"] [class*="st-key-clear-all"] button:hover { color: #C62828; }
 .apx-dot { display: inline-flex; align-items: center; gap: 7px; font-size: 0.8rem; color: #5B6771; }
 .apx-dot i { width: 8px; height: 8px; border-radius: 50%; background: #B8C2CC; display: inline-block; }
 .apx-dot.ok i { background: #1F7A6D; }

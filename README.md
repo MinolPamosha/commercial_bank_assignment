@@ -100,7 +100,10 @@ pulls its transcript back and reuses its `session_id`; if the API has restarted 
 node rehydrates the session from the saved transcript (last six turns plus every document cited), so
 a pronoun follow-up still resolves. Conversations are scoped to the owner: another user asking for the
 same id gets `404`, and in-process session memory is keyed by `(user, session)` so a guessed id never
-reaches someone else's thread.
+reaches someone else's thread. Each Recent row has a delete control (`DELETE /api/conversations/{id}`)
+that removes the transcript, that chat's working memory and any paused LangGraph checkpoint; **Clear all**
+wipes every chat for the signed-in user (`DELETE /api/conversations`, optional `clear_long_term=true`
+also forgets preferences and feedback).
 
 ## How a turn is decided and executed
 

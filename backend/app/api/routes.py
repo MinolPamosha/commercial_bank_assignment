@@ -244,6 +244,34 @@ async def save_conversation(session_id: str, body: ConversationSaveRequest, user
     return {"ok": True}
 
 
+@router.delete("/conversations/{session_id}")
+async def delete_conversation(session_id: str, user=Depends(get_current_user)):
+    """Remove one chat: transcript, session working memory, and any paused graph checkpoint."""
+    from backend.app.agents.graph import forget_thread
+
+    existed = memory_store.delete_conversation(user["username"], session_id)
+    await forget_thread(session_id)
+    if not existed:
+        raise HTTPException(status_code=404, detail="No such conversation for this user")
+    return {"ok": True, "deleted": session_id}
+
+
+@router.delete("/conversations")
+async def delete_all_conversations(
+    clear_long_term: bool = False,
+    user=Depends(get_current_user),
+):
+    """Remove every chat for this user. Pass clear_long_term=true to also forget preferences/feedback."""
+    from backend.app.agents.graph import forget_thread
+
+    # Snapshot ids before delete so we can drop their graph checkpoints too.
+    ids = [c["session_id"] for c in memory_store.list_conversations(user["username"])]
+    count = memory_store.delete_all_conversations(user["username"], clear_long_term=clear_long_term)
+    for sid in ids:
+        await forget_thread(sid)
+    return {"ok": True, "deleted": count, "clear_long_term": clear_long_term}
+
+
 @router.post("/admin/reindex")
 async def reindex(user=Depends(get_current_user)):
     if user["role"].value != "administrator":

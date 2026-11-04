@@ -249,6 +249,40 @@ def open_chat(session_id: str) -> bool:
     return True
 
 
+def delete_chat(session_id: str) -> bool:
+    """Remove one chat on the server (transcript + session memory) and locally."""
+    try:
+        r = httpx.delete(f"{API_BASE}/conversations/{session_id}", headers=auth_headers(), timeout=15)
+        if r.status_code not in (200, 404):
+            r.raise_for_status()
+    except httpx.HTTPError as exc:
+        st.toast(f"Could not delete that chat: {exc}")
+        return False
+    st.session_state.chats.pop(session_id, None)
+    if st.session_state.session_id == session_id:
+        _clear_current()  # the open chat was deleted — start a blank one
+    return True
+
+
+def delete_all_chats(*, clear_long_term: bool = False) -> bool:
+    """Remove every chat for this user; optionally forget long-term preferences too."""
+    try:
+        r = httpx.delete(
+            f"{API_BASE}/conversations",
+            headers=auth_headers(),
+            params={"clear_long_term": str(clear_long_term).lower()},
+            timeout=30,
+        )
+        r.raise_for_status()
+    except httpx.HTTPError as exc:
+        st.toast(f"Could not clear your chats: {exc}")
+        return False
+    st.session_state.chats = {}
+    _clear_current()
+    st.session_state.pop("confirm_clear_all", None)
+    return True
+
+
 # --- Auth ----------------------------------------------------------------------------
 def sign_in(username: str, password: str) -> bool:
     try:
@@ -299,21 +333,47 @@ with st.sidebar:
 
         save_current_chat()
         if st.session_state.chats:
-            st.caption("Recent")
+            head, clear = st.columns([3, 1])
+            head.caption("Recent")
+            if clear.button("Clear all", key="clear-all-chats", type="tertiary", help="Delete every chat and its memory"):
+                st.session_state.confirm_clear_all = True
+            if st.session_state.get("confirm_clear_all"):
+                st.warning("Delete every chat and its working memory for you?")
+                forget = st.checkbox("Also forget long-term preferences & feedback", key="clear-lt-too")
+                y, n = st.columns(2)
+                if y.button("Yes, delete all", key="clear-all-yes", type="primary", use_container_width=True):
+                    if delete_all_chats(clear_long_term=bool(forget)):
+                        st.toast("All chats cleared")
+                        st.rerun()
+                if n.button("Cancel", key="clear-all-no", type="tertiary", use_container_width=True):
+                    st.session_state.confirm_clear_all = False
+                    st.rerun()
             for sid, entry in list(st.session_state.chats.items()):  # already newest first
                 current = sid == st.session_state.session_id
-                if st.button(
-                    entry["title"],
-                    key=f"chat-{sid}",
-                    type="secondary" if current else "tertiary",
-                    use_container_width=True,
-                    disabled=current,
-                ):
-                    if open_chat(sid):
-                        st.rerun()
+                row, trash = st.columns([5, 1])
+                with row:
+                    if st.button(
+                        entry["title"],
+                        key=f"chat-{sid}",
+                        type="secondary" if current else "tertiary",
+                        use_container_width=True,
+                        disabled=current,
+                    ):
+                        if open_chat(sid):
+                            st.rerun()
+                with trash:
+                    if st.button(
+                        "×",
+                        key=f"del-{sid}",
+                        type="tertiary",
+                        help="Delete this chat and its memory",
+                        use_container_width=True,
+                    ):
+                        if delete_chat(sid):
+                            st.toast("Chat deleted")
+                            st.rerun()
 
-        st.divider()
-        # The widget owns its default (on). Seeding the key in session_state before the widget exists
+        st.divider()        # The widget owns its default (on). Seeding the key in session_state before the widget exists
         # made Streamlit drop the value on the next rerun, hiding the panel unasked.
         st.toggle(
             "Show how answers are produced",

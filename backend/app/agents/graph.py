@@ -107,6 +107,18 @@ def get_compiled_graph():
     return build_graph()
 
 
+async def forget_thread(session_id: str) -> None:
+    """Drop any LangGraph checkpoint for this chat (HITL pause, intermediate state)."""
+    graph = get_compiled_graph()
+    checkpointer = getattr(graph, "checkpointer", None)
+    if checkpointer is None:
+        return
+    try:
+        await checkpointer.adelete_thread(session_id)
+    except Exception as exc:  # noqa: BLE001  — older savers may lack adelete_thread
+        logger.warning("forget_thread_failed", session_id=session_id, error=str(exc))
+
+
 # Node whose LLM tokens are streamed to the chat window (the user-facing answer).
 ANSWER_STREAMING_NODE = "response"
 
