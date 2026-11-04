@@ -13,6 +13,7 @@ HITL uses LangGraph's native `interrupt()`:
 from __future__ import annotations
 
 import re
+from difflib import get_close_matches
 from typing import Any
 
 from langgraph.types import interrupt
@@ -28,6 +29,65 @@ REJECTED_ANSWER = "A human reviewer rejected this answer. Please rephrase your q
 def _referenced(answer: str, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The subset of `citations` whose document id the answer mentions (as [doc:ID] or bare)."""
     return [c for c in citations if c.get("doc_id") and re.search(rf"\b{re.escape(str(c['doc_id']))}\b", answer)]
+
+
+# Identifiers the model tends to retype from tool output: e-mail addresses and record ids
+# (E1001, svc-upi, INC-2025-0142). Anything else is prose and left alone.
+_IDENTIFIER_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\b(?:E\d{3,}|svc-[a-z0-9-]+|INC-\d{4}-\d{3,})\b", re.IGNORECASE)
+
+
+def _leaf_strings(value: Any, out: set[str]) -> set[str]:
+    if isinstance(value, dict):
+        for v in value.values():
+            _leaf_strings(v, out)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            _leaf_strings(v, out)
+    elif isinstance(value, str):
+        out.add(value)
+    return out
+
+
+def repair_tool_identifiers(answer: str, tool_results: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
+    """Make identifiers in the answer match the MCP tool data exactly.
+
+    LLMs occasionally mis-copy an address or id ("thariindu.silva@…"). When the answer was built
+    from tool output we know the ground truth, so a near-miss is snapped back to the real value
+    and an identifier the tool never returned is marked unverified rather than passed off as fact.
+    """
+    truth: set[str] = set()
+    for tr in tool_results or []:
+        res = tr.get("result") or {}
+        if res.get("ok"):
+            _leaf_strings(res.get("data"), truth)
+    if not truth:
+        return answer, {}
+    known = {t for t in truth if _IDENTIFIER_RE.fullmatch(t)}
+    if not known:
+        return answer, {}
+    lower = {k.lower(): k for k in known}
+
+    fixed: dict[str, str] = {}
+    unverified: list[str] = []
+
+    def _sub(m: re.Match) -> str:
+        found = m.group(0)
+        if found.lower() in lower:
+            return lower[found.lower()]
+        close = get_close_matches(found.lower(), list(lower), n=1, cutoff=0.8)
+        if close:
+            fixed[found] = lower[close[0]]
+            return lower[close[0]]
+        unverified.append(found)
+        return f"{found} (unverified)"
+
+    repaired = _IDENTIFIER_RE.sub(_sub, answer)
+    flags: dict[str, Any] = {}
+    if fixed:
+        flags["corrected_identifiers"] = fixed
+    if unverified:
+        flags["unverified_identifiers"] = sorted(set(unverified))
+    return repaired, flags
 
 
 async def validate_node(state: AgentState) -> dict:
@@ -73,6 +133,19 @@ async def validate_node(state: AgentState) -> dict:
         )
         ok = True  # repaired
         notes.append("Auto-repaired unsupported document references")
+
+    # Tool-grounded answers: identifiers must match the MCP data byte for byte.
+    answer, id_flags = repair_tool_identifiers(answer, state.get("tool_results") or [])
+    if id_flags:
+        notes.append("Auto-repaired identifiers against tool data")
+        events.append(
+            AgentEvent(
+                event_type="validation",
+                node="validate",
+                message="Corrected identifiers against the tool data",
+                detail=id_flags,
+            )
+        )
 
     if state.get("degraded"):
         notes.append(f"Degraded mode: {state.get('degradation_reason')}")

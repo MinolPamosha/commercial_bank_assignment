@@ -118,6 +118,35 @@ async def test_follow_up_still_strips_documents_never_seen_in_session():
     assert "[doc:INC-2099-0001]" not in out["final_answer"]
 
 
+async def test_identifiers_in_tool_answers_are_snapped_to_the_mcp_data():
+    tool_results = [
+        {
+            "tool": "mcp_employee_directory",
+            "result": {"ok": True, "data": {"employees": [{"id": "E1888", "name": "Tharindu Silva", "email": "tharindu.silva@apexbank.example"}]}},
+        }
+    ]
+    out = await validate_node(
+        {
+            "draft_answer": "Tharindu Silva (E1888) is on call: thariindu.silva@apexbank.example. Escalate to ops-lead@apexbank.example.",
+            "citations": [],
+            "tool_results": tool_results,
+            "intent": "tool",
+        }
+    )
+    answer = out["final_answer"]
+    assert "tharindu.silva@apexbank.example" in answer and "thariindu" not in answer  # near-miss corrected
+    assert "ops-lead@apexbank.example (unverified)" in answer  # never returned by the tool
+    assert "E1888" in answer and "E1888 (unverified)" not in answer  # exact match left alone
+    flags = next(e.detail for e in out["events"] if e.message.startswith("Corrected identifiers"))
+    assert flags["corrected_identifiers"] == {"thariindu.silva@apexbank.example": "tharindu.silva@apexbank.example"}
+
+
+async def test_identifier_repair_is_a_no_op_without_tool_data():
+    draft = "Mail nimali.perera@apexbank.example about [doc:POL-OPS-04]."
+    out = await validate_node({"draft_answer": draft, "citations": [_POLICY], "tool_results": [], "intent": "qa"})
+    assert out["final_answer"] == draft
+
+
 def test_session_memory_remembers_cited_documents_across_turns():
     store = MemoryStore()
     store.remember_citations("s1", "u1", [_POLICY, {"doc_id": "INC-2025-0033", "title": "NEFT dup"}])

@@ -52,7 +52,8 @@ async def response_node(state: AgentState) -> dict:
             "in citations or earlier_sources. Call out recurring root causes when research batches exist. "
             "If a tool_results entry has ok=false because the role is 'not permitted', say plainly that the "
             "user's role is not authorized for that data and suggest contacting an analyst/administrator — "
-            "do not guess the data. If a tool failed or timed out, say live data is unavailable right now. "
+            "do not guess the data. When answering from tool_results, copy names, ids and e-mail addresses "
+            "exactly as they appear in the data. If a tool failed or timed out, say live data is unavailable right now. "
             "If the question is a follow-up, answer from the memory block. If evidence is weak, say what is missing."
         )
         try:
